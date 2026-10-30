@@ -1,0 +1,13 @@
+* text=auto
+
+# Windows 脚本用 CRLF，避免 PowerShell 5.1 与 git 的换行来回改
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 产物一律按二进制处理
+*.exe binary
+*.dll binary
+*.addon64 binary
+*.addon32 binary
+*.zip binary

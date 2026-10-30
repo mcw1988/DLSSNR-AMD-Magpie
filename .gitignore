@@ -1,0 +1,26 @@
+# 构建中间产物
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+build/
+x64/
+Debug/
+Release/
+
+# 上游源码与权重（不入库）
+upstream/
+weights/
+*.zip
+*.7z
+
+# 运行期产物
+*.log
+ReShade.ini
+config/config.json.bak-*
+
+# 编辑器
+.vs/
+.vscode/
+*.user

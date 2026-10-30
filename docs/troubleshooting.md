@@ -1,0 +1,85 @@
+# 排错
+
+先看日志，再看现象。每条都能在日志里找到一句原话。
+
+## Home 按了没反应
+
+1. 看 `overlay-input.log`：
+   - 只有 `loaded` 没有 `swapchain window ...` → 它没拿到窗口句柄（ReShade 还没 present 过，
+     或 add-on 在 ReShade 之前被禁用）。确认 `ReShade.log` 里有
+     `Registered add-on "overlay-input" ...`。
+   - 有窗口号、按 Home 后没有 `overlay input ON` → 按键没到钩子。多半是**另一个程序也用这个键并且
+     抢先**，或者你的键盘软件把它拦了；换一个 `Key`（`overlay-input.ini`，虚拟键码）并同步改
+     `ReShade.ini` 的 `[INPUT] KeyOverlay`。
+2. 面板开了但鼠标点不动：`Swallow=0` 试试；仍不行就看日志里有没有连续的 `mouse msg=0200`
+   （有就说明钩子在收事件）。
+
+## `注册热键 Scale 失败 LastErrorCode: 1409`
+
+`1409 = ERROR_HOTKEY_ALREADY_REGISTERED`：这个组合键被**别的程序**长期占用（远程桌面、输入法、
+截图工具都可能）。后果是 Magpie 的缩放热键按不出来，只能用主界面按钮启动缩放。
+换组合键即可，与 NR 无关。
+
+## mochizuki 建网失败：`e4m3 x e4m3 -> fp32 16x16x16 subgroup config not reported`
+
+设备不支持 FP8 协作矩阵。这条只在 **RDNA4** 上成立；在 NVIDIA/Intel 或更老的 AMD 卡上一定失败。
+判断方法：`mochizuki_nr.log` 开头会写选到的 Vulkan 设备名。
+
+## `no Vulkan device matches the game's D3D12 adapter`
+
+运行时按 LUID 找与 D3D12 同一块显卡的 Vulkan 设备，没找到。常见于双显卡笔记本（核显负责显示、
+独显负责渲染）或驱动装重了。`mochizuki_nr.log` 会列出它看到的设备。
+
+## 上次建网时“崩溃”，之后一直退回 danielblnc
+
+`dlssnr-amd\build.pending` 是建网过程中的标记文件；进程被杀就会留在那里，宿主据此判定上次崩过。
+**删掉它**再试。第一次建网要 1~5 分钟，别中途关窗口。
+
+## 两条运行时“同时生效”/画面被改两次
+
+`ReShade.log` 里同时出现两个 add-on 的注册行就是没互斥：
+
+```
+Registered add-on "DLSS5 AMD single-frame verification" ...
+Registered add-on "OpenNR" ...           ← 不该同时出现
+```
+
+跑 `nr-router.exe --dry-run` 看它认为该是谁，再跑一次让它改文件，**然后重启 Magpie**
+（ReShade 只在进程启动时扫 add-on）。
+
+## 换了组，跑的却还是上一个运行时
+
+同上：换组不会换 add-on。必须 `nr-router` 改文件名 + 重启 Magpie。用
+`nr-router.exe --watch --restart` 可以让它在 2 秒内自动做完。
+
+## `already running` / 程序启动后立刻退出
+
+`logs\magpie.log` 里写 `已经有一个实例正在运行`。Magpie 是单实例：先退出旧的。
+（可以用托盘图标退出，任务管理器强杀会留下未写的配置。）
+
+## 显存不足
+
+`mochizuki_nr.log` 会写 `VRAM for the network at 1920x1080: about 1367 MB needed, N MB available`。
+1080p 单 pass 约 1.4 GB；`dlssnr-amd\pipeline.cache` 与 `prewarm\manifest.txt` 只是编译缓存，
+删掉不会省显存但会导致下次重建（慢）。降 `Scale` 或用 `MochizukiInt4=1`（需要 `aco\` 与 `int4\`）。
+
+## `pipeline.cache` 是别的显卡留下的
+
+`dlssnr-amd\pipeline.cache` 是 Vulkan 管线缓存，与驱动/设备绑定。换了显卡或驱动后它没用，
+驱动会自己忽略；但如果出现奇怪的建网失败，先删掉它再试。
+
+## 我已经把 `*_SR` 效果从组里删了，还有影响吗
+
+没有。`FSR3_SR` / `FSR4_SR` / `XeSS_SR` 都是 1:1 拷贝存根，删掉只少一次全屏拷贝，画面不变。
+但 `nr-router` 的判定依赖它们：`NR-lmxxf` 组必须有 `FSR3/FSR4_SR`，`NR-mochizuki` 组必须有
+`XeSS\XeSS_SR`，否则它认为这个组“与 NR 无关”，不会切换 add-on。
+
+## 需要提供的材料
+
+出问题时把这些一起带上，基本能定位到底：
+
+```
+amd-nr.log  mochizuki_nr.log  overlay-input.log  ReShade.log  logs\magpie.log
++ nr-router.exe --dry-run 的输出
++ 显卡型号与驱动版本（Win32_VideoController）
+```
