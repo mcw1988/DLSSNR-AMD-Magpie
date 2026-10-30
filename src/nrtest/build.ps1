@@ -25,10 +25,18 @@ $env:LIB = @(
 
 Write-Host "MSVC $($msvc.Name)  SDK $sdkVer"
 $cl = Join-Path $msvc.FullName 'bin\Hostx64\x64\cl.exe'
+$common = @('/nologo', '/utf-8', '/std:c++20', '/EHsc', '/O2', '/MT', '/W3', '/DNDEBUG',
+            '/DNOMINMAX', '/DWIN32_LEAN_AND_MEAN')
 Push-Location $root
 try {
-    & $cl /nologo /utf-8 /std:c++20 /EHsc /O2 /MT /W3 /DNDEBUG /DNOMINMAX /DWIN32_LEAN_AND_MEAN `
-        main.cpp /Fe:nrtest.exe
-    if ($LASTEXITCODE -ne 0) { throw "compile failed ($LASTEXITCODE)" }
+    # 冒烟测试：跑一帧，看运行时能不能用
+    & $cl @common main.cpp /link /SUBSYSTEM:CONSOLE /OUT:"$dist\nrtest.exe" d3d12.lib dxgi.lib user32.lib
+    if ($LASTEXITCODE -ne 0) { throw "nrtest compile failed ($LASTEXITCODE)" }
+
+    # 帧成本基准：跑 N 帧，分别统计 prepare / 生产拷贝 / 网络 / 消费拷贝
+    & $cl @common nrbench.cpp /link /SUBSYSTEM:CONSOLE /OUT:"$dist\nrbench.exe" d3d12.lib dxgi.lib user32.lib
+    if ($LASTEXITCODE -ne 0) { throw "nrbench compile failed ($LASTEXITCODE)" }
 } finally { Pop-Location }
-Get-Item (Join-Path $dist 'nrtest.exe') | Select-Object Name, Length
+
+Get-ChildItem (Join-Path $dist 'nrtest.exe'), (Join-Path $dist 'nrbench.exe') |
+    Select-Object Name, Length
