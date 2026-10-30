@@ -104,3 +104,30 @@ RecordInputs → ExecuteCommandLists → EnqueueHip → Poll → RecordOutputs �
   `e4m3 x e4m3 -> fp32 16x16x16 subgroup config not reported`，这是硬件不匹配，不是配置错误。
 - Magpie 的缩放热键若被别的程序占用，日志会写 `注册热键 Scale 失败 LastErrorCode: 1409`，
   此时只能用界面按钮启动缩放。
+
+## 8. present 阶段的代价模型（重要）
+
+NR 不在 Magpie 的 HLSL 链里，而是挂在 ReShade 的 present 上，所以它看到的是**补帧之后**的
+输出帧。这决定了成本怎么算：
+
+```
+游戏渲染 → Magpie 捕获 → XeSS_SR(1:1) → FrameRate_Filter → XeSS FG(xN) → Present
+                                                                          ↑
+                                                              NR 在这里，被调用 N 次
+```
+
+- **补帧倍率 = NR 成本倍率**。FG 2x 时一个内容帧被呈现 2 次，NR 就跑 2 次；
+  这是用 OpenNR 自己的逐帧计数测出来的（3311 帧 / 49.1 s vs 33.6 内容帧 = 2.00）。
+- **`Scale` 只缩网络**。光流和入出拷贝仍按帧尺寸算：
+
+  ```
+  optical flow: FidelityFX, 3840x2160 frame, 480x270 blocks of 8x8, into the 1920x1080 raster
+  ```
+
+  所以把 `Scale` 从 0.6 降到 0.5 只省约 1.9 ms/次，剩下的是固定的 4K 开销。
+- **网络只是一部分**。实机 4K、1080 档、无补帧：网络 3.27–3.40 ms，而整个 add-on 阶段
+  约 15 ms 一帧里的 3.8 ms 是网络之外的东西（4K 光流 + 双向拷贝 + D3D12↔Vulkan 桥接）。
+
+这条模型也解释了为什么"离线基准更快"没有直接体现在实机帧数上：对照的 lmxxf 根本没有
+4K 光流这一步，它的时域不依赖运动矢量。详见 [measurements.md](measurements.md) 与
+[findings.md](findings.md)。

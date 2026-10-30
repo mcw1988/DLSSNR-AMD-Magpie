@@ -7,24 +7,26 @@
 | `overlay-input.addon64` | `src/overlay-input/overlay_input.cpp` | `cl /O2 /MT /LD ... /link /DLL`，依赖 ReShade 头文件 |
 | `nr-router.exe` | `src/nr-router/nr_router.cpp` | `cl /O2 /MT ... /link /SUBSYSTEM:CONSOLE` |
 | `nrtest.exe` | `src/nrtest/main.cpp` | `cl /O2 /MT ... /link` + `d3d12.lib dxgi.lib` |
+| `nrbench.exe` | `src/nrtest/nrbench.cpp` | 同上；跑 N 帧并统计各阶段墙钟 |
 | `amd-nr.addon64` | **上游** OpenNR 源码（`zmodelerlover/dlss5-neural-amd`，MIT） | 该工程的 `build.ps1 -Target neural` |
 
 构建环境：MSVC 14.44.35207（VS 2022 Build Tools 17.14）+ Windows SDK 10.0.26100，`/MT` 静态 CRT。
-三个自有产物只依赖系统 DLL（`USER32` / `bcrypt` / `SHELL32` / `ole32` / `KERNEL32`），
+四个自有产物只依赖系统 DLL（`USER32` / `bcrypt` / `SHELL32` / `ole32` / `KERNEL32`），
 导出只有自注册 add-on 需要的 `NAME`、`DESCRIPTION`。
 
 ## 校验值
 
 ```
-79d58f27ca0629c45198206ef6bdba29158a1a6045d7f7d7a075200dcb8f917a  nr-router.exe
-fb0315565d9cbfcdd85376efd6a57f8b438d6bafb5c9d06540889ae7127543ad  nrtest.exe
-c7f17e370af1ebfaf6c6e71efc816958d3ca04ea1dd8b910b9428fb1b84f3960  overlay-input.addon64
-c9cef21554721bccd3434aedda0e591b24b7fc73253d4196e401e8b2416b0571  amd-nr.addon64
+58e0cd801f2f49719963b7242abd7bb86631fa076416e772a95c963a29addd15  nr-router.exe
+48a857598c63c5a71c5a21a65aa28363106df31093df50e42a8c845ab83c134c  nrtest.exe
+acc426d9f9992c990f9c608aa9288318b758cb3869077ffdb2ecf70789989781  nrbench.exe
+e27b6dede96f95a73c439bb7705ed45b54432eed805c348574c4086108385f55  overlay-input.addon64
+31a1664f0ceee46349498199fad3479598de1a640e03e285cf5dfe004a5075b6  amd-nr.addon64
 ```
 
 ## 许可
 
-- `overlay-input.addon64`、`nr-router.exe`、`nrtest.exe`：本仓库 MIT。
+- `overlay-input.addon64`、`nr-router.exe`、`nrtest.exe`、`nrbench.exe`：本仓库 MIT。
 - `amd-nr.addon64`：上游 OpenNR（MIT）的构建产物，再分发时须保留其版权与许可声明，
   见 [../THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md)。
 

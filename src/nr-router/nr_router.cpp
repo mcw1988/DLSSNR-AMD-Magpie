@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cwctype>
 #include <string>
 #include <vector>
 
@@ -39,6 +40,7 @@ struct Decision {
     int modeIndex = -1;
     bool hasXess = false;
     bool hasFsr3 = false;
+    bool byName = false;
     std::wstring note;
 };
 
@@ -151,6 +153,32 @@ Decision Decide(const std::wstring& configPath)
     d.hasFsr3 = mode.find("\"FSR3\\\\FSR3_SR\"") != std::string::npos ||
                 mode.find("\"FSR4\\\\FSR4_SR\"") != std::string::npos;
 
+    // A group can name its backend even when the chain has no SR effect at all. The Bicubic
+    // chains added for 4K keep NR as a ReShade add-on, so "contains XeSS_SR" is no longer a
+    // reliable proxy: NR-mochi-fast has neither XeSS_SR nor FSR3_SR and would read as "no NR".
+    std::wstring lowered = d.modeName;
+    for (wchar_t& c : lowered)
+        c = static_cast<wchar_t>(towlower(c));
+    const bool nameMochi = lowered.find(L"mochi") != std::wstring::npos;
+    const bool nameLmxxf = lowered.find(L"lmxxf") != std::wstring::npos ||
+                           lowered.find(L"dlss5") != std::wstring::npos;
+
+    if (nameMochi && !nameLmxxf) {
+        d.backend = Backend::Mochizuki;
+        d.byName = true;
+        return d;
+    }
+    if (nameLmxxf && !nameMochi) {
+        d.backend = Backend::Lmxxf;
+        d.byName = true;
+        return d;
+    }
+    if (nameMochi && nameLmxxf) {
+        d.backend = Backend::Conflict;
+        d.byName = true;
+        return d;
+    }
+
     if (d.hasXess && d.hasFsr3) {
         d.backend = Backend::Conflict;
     } else if (d.hasXess) {
@@ -166,6 +194,18 @@ Decision Decide(const std::wstring& configPath)
 bool FileExists(const std::wstring& path)
 {
     return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+// Magpie 0.6.x keeps its live settings in config\v4e\config.json; config\config.json is the
+// legacy file that only gets read during migration. Prefer whichever of the two actually has a
+// scaling-mode list, so the router follows the group the user picked in the current build.
+std::wstring ResolveConfig(const std::wstring& dir)
+{
+    const std::wstring v4e = dir + L"\\config\\v4e\\config.json";
+    const std::wstring legacy = dir + L"\\config\\config.json";
+    if (FileExists(v4e) && ReadFileUtf8(v4e).find("\"scalingModes\"") != std::string::npos)
+        return v4e;
+    return legacy;
 }
 
 // Makes sure 'name' exists as <dir>\<name> when wanted, and as <dir>\<name>.off when not.
@@ -213,8 +253,11 @@ const wchar_t* BackendName(Backend b)
 int Apply(const std::wstring& dir, const Decision& d, bool dryRun)
 {
     std::wprintf(L"缩放组 [%d] %s\n", d.modeIndex, d.modeName.c_str());
-    std::wprintf(L"  含 XeSS\\XeSS_SR: %s   含 FSR3/FSR4_SR: %s\n", d.hasXess ? L"是" : L"否",
-                 d.hasFsr3 ? L"是" : L"否");
+    if (d.byName)
+        std::wprintf(L"  按组名判定（链里可以不挂 SR 效果）\n");
+    else
+        std::wprintf(L"  含 XeSS\\XeSS_SR: %s   含 FSR3/FSR4_SR: %s\n", d.hasXess ? L"是" : L"否",
+                     d.hasFsr3 ? L"是" : L"否");
     if (!d.note.empty()) {
         std::wprintf(L"  %s\n", d.note.c_str());
         return 2;
@@ -290,7 +333,9 @@ BOOL CALLBACK FindWindowOfProcess(HWND hwnd, LPARAM param)
 
 void RestartMagpie(const std::wstring& dir)
 {
-    const std::wstring exe = dir + L"Magpie.exe";
+    const std::wstring exe = (dir.empty() || dir.back() == L'\\' || dir.back() == L'/')
+                                 ? dir + L"Magpie.exe"
+                                 : dir + L"\\Magpie.exe";
     if (!FileExists(exe)) {
         std::wprintf(L"  找不到 %s，跳过重启\n", exe.c_str());
         return;
@@ -315,7 +360,14 @@ void RestartMagpie(const std::wstring& dir)
     si.cb = sizeof si;
     PROCESS_INFORMATION pi{};
     std::wstring cmd = L"\"" + exe + L"\"";
-    if (CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
+    // Break away from the caller's job object when allowed: a launcher started from a console
+    // or a script would otherwise take Magpie down with it when it exits.
+    BOOL started = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE,
+                                  CREATE_BREAKAWAY_FROM_JOB, nullptr, dir.c_str(), &si, &pi);
+    if (!started)
+        started = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                                 dir.c_str(), &si, &pi);
+    if (started) {
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
         std::wprintf(L"  已重新启动 Magpie\n");
@@ -350,8 +402,9 @@ int wmain(int argc, wchar_t** argv)
     while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/'))
         dir.pop_back();
 
-    const std::wstring config = dir + L"\\config\\config.json";
+    const std::wstring config = ResolveConfig(dir);
     std::wprintf(L"目录: %s\n", dir.c_str());
+    std::wprintf(L"配置: %s\n", config.c_str());
 
     Decision last{};
     int lastRc = 0;
@@ -361,10 +414,18 @@ int wmain(int argc, wchar_t** argv)
         if (!watch || !same) {
             const int rc = Apply(dir, d, dryRun);
             lastRc = rc;
-            if (rc == 1 && !dryRun) {
-                std::wprintf(L"\n下一次启动 Magpie 生效（ReShade 只在启动时加载 add-on）。\n");
-                if (restart)
+            // Restarting is not only about the add-on file names: OpenNR shuts itself off for
+            // good when Magpie destroys its D3D12 device (i.e. every time scaling stops), so a
+            // group switch leaves NR dead even though the files are already correct. When the
+            // caller asked for --restart, always restart rather than only on a file change.
+            if (rc != 2 && !dryRun) {
+                if (rc == 1)
+                    std::wprintf(L"\n下一次启动 Magpie 生效（ReShade 只在启动时加载 add-on）。\n");
+                if (restart) {
+                    if (rc == 0)
+                        std::wprintf(L"\n文件无需改动；仍重启 Magpie，让 OpenNR 在新设备上重新挂载。\n");
                     RestartMagpie(dir);
+                }
             }
         }
         last = d;

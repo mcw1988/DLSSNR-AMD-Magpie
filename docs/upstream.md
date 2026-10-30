@@ -8,7 +8,9 @@
 
 - **lmxxf 的 Magpie 发行包**（本项目的起点，内含 Magpie + 他改的 `DLSS5-AMD` 资产与 add-on）：
   <https://github.com/lmxxf/dlss5-on-amd-9070xt-porting> 的 release，包名形如 `Magpie-DLSS5-AMD-0.41`。
-  实测版本：Magpie **0.6.6**（`logs\magpie.log` 会打印）。
+  实测版本：Magpie **0.6.11**（`Magpie-DLSS5-AMD-0.45`，`logs\magpie.log` 会打印）。
+  0.6.11 起设置存在 `config\v4e\config.json`，旧的 `config\config.json` 只在迁移时读取；
+  同时还多了自动的 GPU 进程优先级（`GPU process priority verified: REALTIME`）。
 - 上游 Magpie 原版：<https://github.com/Blinue/Magpie/releases>。用原版需要自己补
   `libxess.dll`、`amd_fidelityfx_upscaler_dx12.dll` 等 SR 相关 DLL，并自建 `effects\XeSS\XeSS_SR.hlsl`
   等占位效果（内容就是 `INPUT.SampleLevel(sam, pos, 0)` 的 1:1 拷贝）。
@@ -28,7 +30,7 @@
 
 | 需要什么 | 路径 | 大小 |
 |---|---|---|
-| 运行时 + SPIR-V + ACO 记录 + int4 权重 | `mochizuki/0.5.9-opennr/mochizuki-0.5.9-opennr.zip` | 84 MB |
+| 运行时 + SPIR-V + ACO 记录 + int4 权重 | `mochizuki/0.5.8-opennr/`（与 OpenNR 0.7.15 官方配对；0.5.9 也在同一目录下） | 84 MB |
 | RDNA3 专用变体（可选，RDNA4 不需要） | `mochizuki/0.5.9-opennr/mochizuki-rdna3-0.5.9-opennr.zip` | 9 MB |
 | 默认网络（**包内没有，必须单独下**） | `mochizuki/model-small-1/dlssnr-small.bin` | 114 MB |
 | 310.8 网络（可选，int4 mixed 需要它） | `mochizuki/model-1/dlssnr.bin` | 148 MB |
@@ -46,6 +48,10 @@ dlssnr-amd\
 ```
 
 （`scripts/fetch-upstream.ps1` 会替你做这件事。）
+
+> **部署目录必须是纯 ASCII 路径**。mochizuki 的 ACO 判定不兼容中文路径，
+> 放在 `D://迅雷下载//...` 下会报 `ACO asked for, but ...\aco has no records\ and shaders\`，
+> 即使文件齐全；换到 `D://Magpie-NR-045` 立刻变成 `ACO: the network runs ACO's machine code`。
 
 ## 4. lmxxf 运行时
 
@@ -81,7 +87,7 @@ dlssnr-amd\
 
 | 项 | 值 |
 |---|---|
-| 整包解压后 | 约 1.04 GB |
+| 整包解压后 | 约 1.5 GB（不含 NVIDIA 专用 DLL） |
 | `DLSS5-AMD\native-game-tiled-assets` | 594 MB |
 | `dlssnr-amd` | 286 MB |
 | `libxess.dll` / `libxess_fg.dll` / `amd_fidelityfx_upscaler_dx12.dll` | 78 MB / 23 MB / 29 MB |

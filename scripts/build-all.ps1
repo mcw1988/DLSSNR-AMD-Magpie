@@ -1,4 +1,4 @@
-﻿# 一键构建本仓库的三个组件（以及可选的上游 amd-nr.addon64）。
+﻿# 一键构建本仓库的四个组件（以及可选的上游 amd-nr.addon64）。
 #
 # 需要：VS 2022 Build Tools（VC Tools x64）+ Windows SDK。
 # 用法：powershell -ExecutionPolicy Bypass -File scripts/build-all.ps1
@@ -67,6 +67,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "nrtest 构建失败 ($LASTEXITCODE)" }
 } finally { Pop-Location }
 Write-Host 'OK nrtest.exe'
+
+# --- nrbench ----------------------------------------------------------------
+Push-Location (Join-Path $repo 'src\nrtest')
+try {
+    & $cl @common nrbench.cpp /link /SUBSYSTEM:CONSOLE /OUT:"$dist\nrbench.exe" d3d12.lib dxgi.lib user32.lib
+    if ($LASTEXITCODE -ne 0) { throw "nrbench 构建失败 ($LASTEXITCODE)" }
+} finally { Pop-Location }
+Write-Host 'OK nrbench.exe'
 
 # --- overlay-input ----------------------------------------------------------
 if ($reshadeInclude) {

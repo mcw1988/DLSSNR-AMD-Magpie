@@ -20,12 +20,16 @@ overlay-input.ini               Key=36（Home）/ Swallow=1
 nr-router.exe  nr-router.cmd    效果组 → 运行时的互斥路由
 
 amd-nr.ini                      [amd-nr] NrBackend=mochizuki, StartOn=1
-config\config.json              Magpie 配置（两个效果组在这里）
+config\v4e\config.json          Magpie 0.6.11 的实际配置（效果组、节奏、限帧都在这里）
+config\config.json             旧版遗留文件；0.6.11 只在迁移时读它，改它不生效
 ```
+
+> 0.6.11 把设置拆进了 `config\v4e\`。手改配置时务必改 `v4e\config.json`，
+> 改 `config\config.json` 会被静默忽略。
 
 ## 2. 两个效果组
 
-在 Magpie 里建两个缩放模式（组名随意，`nr-router` 只看组内**效果名**）：
+在 Magpie 里建两个缩放模式（`nr-router` 先看组名，再回退到组内效果名）：
 
 | 组 | 效果链 | 对应运行时 |
 |---|---|---|
@@ -34,6 +38,9 @@ config\config.json              Magpie 配置（两个效果组在这里）
 
 `*_SR` 都是 1:1 拷贝存根，只用来建立 SR 台阶与纹理尺寸，不参与像素替换 —— NR 是在 ReShade
 的 present 阶段做的。
+
+组名里含 `mochi` → mochizuki；含 `lmxxf` / `DLSS5` → lmxxf。名字看不出来时，
+才回退到「组里有没有 `XeSS_SR` / `FSR3/FSR4_SR`」——所以把 SR 存根删掉也能正确判定。
 
 **同一个组里不允许同时出现 `XeSS\XeSS_SR` 与 `FSR3/FSR4_SR`**：`nr-router` 会拒绝执行并
 以退出码 2 报错（“按规则不允许”）。
@@ -47,6 +54,11 @@ ReShade 只在进程启动时加载 add-on，所以：
 3. 双击 `nr-router.cmd` → 它会先打印判定结果，问你要不要立刻生效 → 按 `Y`
    → 换文件 + 自动重启 Magpie；
 4. 重新选窗口 / 按缩放热键，继续缩放。
+
+> **为什么必须重启**：OpenNR 收到 swapchain/设备销毁后会把自己置为 off，且不会自愈
+> （`off: the game destroyed its D3D12 device; restart the game to re-enable`）。
+> Magpie 每次停缩放都会销毁设备，所以"停一下再开"不够，必须换进程。
+> `nr-router --restart` 现在无论文件是否变化都会重启，就是为了这一步。
 
 想省掉第 3 步：让 `nr-router.exe --watch --restart` 常驻（可开机自启）。换完组 2 秒内
 自动换文件并重启 Magpie。缺省不这么做，是因为换组瞬间画面会断一下，容易被误认为崩溃。
@@ -72,7 +84,7 @@ nr-router.exe --dry-run
 | `amd-nr.ini` | mochizuki 宿主：`NrBackend=mochizuki`、`StartOn`、`Scale`、`Passes`、`MochizukiInt4`、`MochizukiAco`、UI 语言等 |
 | `overlay-input.ini` | 面板热键（`Key`，虚拟键码，36=Home）与是否吞输入（`Swallow`） |
 | `DLSS5-AMD\default-config.txt` | lmxxf 的调参面（升级会覆盖）；个人改动写 `custom-config.txt` |
-| `config\config.json` | Magpie 效果组与 `profiles[0].scalingMode` |
+| `config\v4e\config.json` | Magpie 效果组、`profiles[0].scalingMode`、节奏与限帧（0.6.11） |
 
 ## 6. 先验运行时（不启动 Magpie）
 
@@ -80,7 +92,8 @@ nr-router.exe --dry-run
 tools\nrtest.exe "<Magpie 目录>"
 ```
 
-它会建一个自己的 D3D12 设备和队列，直接对 `MochizukiNrRuntime.dll` 跑一帧：
+它会建一个自己的 D3D12 设备和队列，直接对 `MochizukiNrRuntime.dll` 跑一帧。
+量成本用 `nrbench.exe "<目录>" 1920 1080 40 aco 0.5`（宽 高 帧数 是否 ACO 网络缩放）：
 
 - 成功：`PrepareFrame rc=0`、`private_output` 非 0、末尾打印与输入的差异均值；
 - 首次会编译管线，可能要 1~5 分钟，窗口没反应是正常的，**别中途关掉**；

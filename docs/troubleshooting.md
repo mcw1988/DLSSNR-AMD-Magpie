@@ -52,6 +52,35 @@ Registered add-on "OpenNR" ...           ← 不该同时出现
 同上：换组不会换 add-on。必须 `nr-router` 改文件名 + 重启 Magpie。用
 `nr-router.exe --watch --restart` 可以让它在 2 秒内自动做完。
 
+## 换完组，画面没降噪：NR 其实已经停了
+
+`amd-nr.log` 里反复出现这两行，就是它自己关了：
+
+```
+swapchain going away (resize 0) after N frames
+off: the game destroyed its D3D12 device; restart the game to re-enable
+```
+
+Magpie 每次**停止缩放**都会销毁 D3D12 设备，OpenNR 收到后把自己置为 off，而且**不会自愈**
+（后面的 `swapchain back ...` 只重建桥接，不会把效果打开）。
+
+处理：换完组跑一次 `nr-router.cmd`（它会重启 Magpie），或从托盘退出 Magpie 再打开。
+"停掉捕获再开始"不够——那只是又销毁了一次设备。
+
+## 切到 3x 补帧后出现 D3D12 红字 / 一直不恢复
+
+3x 下每个内容帧会被呈现 3 次，NR 也就评估 3 次。4K 上这个量已经超过桥接的在飞预算
+（addon 里有 `four jobs already in flight`、`network skipped: the last list that read the
+descriptor heap is still on the GPU` 这类保护），随后停机并报设备错误。
+
+先退回 2x；确实要用 3x，需要先把 NR 单次成本压下来（`Scale`、`Motion`）。
+
+## ACO 明明有文件却不生效
+
+`amd-nr.log` 写 `ACO asked for, but ...\aco has no records\ and shaders\`，而文件其实在。
+**路径里有非 ASCII 字符**（例如 `D://迅雷下载//...`）就会这样。把整个实例放到纯 ASCII 目录
+（如 `D://Magpie-NR-045`）即可，ACO 日志会变成 `ACO: the network runs ACO's machine code`。
+
 ## `already running` / 程序启动后立刻退出
 
 `logs\magpie.log` 里写 `已经有一个实例正在运行`。Magpie 是单实例：先退出旧的。
@@ -70,9 +99,9 @@ Registered add-on "OpenNR" ...           ← 不该同时出现
 
 ## 我已经把 `*_SR` 效果从组里删了，还有影响吗
 
-没有。`FSR3_SR` / `FSR4_SR` / `XeSS_SR` 都是 1:1 拷贝存根，删掉只少一次全屏拷贝，画面不变。
-但 `nr-router` 的判定依赖它们：`NR-lmxxf` 组必须有 `FSR3/FSR4_SR`，`NR-mochizuki` 组必须有
-`XeSS\XeSS_SR`，否则它认为这个组“与 NR 无关”，不会切换 add-on。
+画面不变，但会让 `nr-router` 的**回退判定**失效：它先看组名（含 `mochi` / `lmxxf` / `DLSS5`），
+名字看不出来时才靠 `XeSS_SR` / `FSR3/FSR4_SR` 判断。组名规范的话，删掉存根也能正确切换；
+组名是中文或自定义的，就保留存根，否则它会把该组当成“与 NR 无关”。
 
 ## 需要提供的材料
 
