@@ -14,6 +14,9 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 
 ---
 
+预打包的实机目录见 **[Releases v0.1](https://github.com/mcw1988/magpie-nr/releases/tag/v0.1)**（两个分卷，
+解到同一目录即可运行）。
+
 ## 状态（v0.1，2026-10-31）
 
 宿主已迁到 **Magpie 0.6.11**（`Magpie-DLSS5-AMD-0.45`），以下都在实机验证过：
@@ -116,4 +119,4 @@ dist/               预编译产物（由本仓库源码构建，见 dist/README
 MinHook MIT），详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 **本仓库不包含** ReShade、Magpie、Intel XeSS、AMD FidelityFX 的二进制，也不包含模型权重；
-`dist/` 里只有本仓库源码构建的三件产物与上游 OpenNR add-on 的引用。
+`dist/` 里只有本仓库源码构建的四件产物与上游 OpenNR add-on 的引用。
