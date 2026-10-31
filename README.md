@@ -29,10 +29,12 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 | 场景（4K，NR 1080 档，无补帧，游戏自限帧） | 原生帧 |
 |---|---|
 | lmxxf 运行时（对照实例） | 70–72 |
-| mochizuki 运行时（本项目） | 64 |
+| mochizuki，Motion 开（FidelityFX 光流） | 64 |
+| mochizuki，**Motion 关** | **68–75**（多次顶到游戏内 75 限帧） |
 
-差距 1.55 ms/帧，来源已定位到**网络之外**的固定开销（4K 光流 + 拷贝 + 桥接），
-不是运行时本身慢：网络我们比对方快 2.22 ms。详见 [docs/findings.md](docs/findings.md)。
+差距来自**网络之外**的固定开销，不是运行时本身慢：网络我们比对方快 2.22 ms，
+但 4K FidelityFX 光流要多花约 2.3 ms/帧（`Motion=0` 即可去掉），另有约 1.4 ms 的
+4K 拷贝与 D3D12↔Vulkan 桥接。详见 [docs/findings.md](docs/findings.md)。
 
 > 补帧同时开启时，NR 的成本会按倍率翻倍（2x 下每个内容帧跑 2 次，有逐帧计数为证），
 > 这是选 2x / 3x 时必须算进去的一项。

@@ -24,6 +24,21 @@
 **网络我们快 2.22 ms，整体却慢 1.55 ms** —— 差额 3.77 ms 全在网络之外。拆解见
 [findings.md](findings.md#2-为什么基准里的领先没有出现)。
 
+### 关掉运动矢量之后（同一天补测）
+
+把 OpenNR 面板里的 **Motion 关掉**（此时不再算 4K FidelityFX 光流）：
+
+| | 原生帧 | fenceAvgMs |
+|---|---|---|
+| Motion 开（FidelityFX 光流） | 64 | 约 9–10 |
+| Motion 关 | **68–75**（多次顶到游戏内的 75 限帧） | **4.6–5.5** |
+
+也就是**光流本身约 2.3 ms/帧**，关掉后 NR 的整体开销已经藏进游戏的限帧余量里，
+与输入帧率基本持平。`MotionScale` 从 1.0 拖到 0.5 / 0.2 只带来很小改善，说明成本与
+矢量缩放无关，主要来自 FFX 光流本身在 4K 上的固定开销。
+
+采集：`amd-nr.log` 的 `menu: useMotion 1 -> 0` 与 `logs\magpie.log` 同步对照。
+
 采集：`logs\magpie.log` 的 `Backend publication CPU timing` 相邻两行时间差 / 120。
 
 ---
