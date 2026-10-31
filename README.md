@@ -17,7 +17,10 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 预打包的实机目录见 **[Releases v0.1](https://github.com/mcw1988/magpie-nr/releases/tag/v0.1)**（两个分卷，
 解到同一目录即可运行）。
 
-## 状态（v0.1，2026-10-31）
+## 状态（v0.2，2026-10-31 晚）
+
+当日调优全过程见 **[docs/2026-10-31-session.md](docs/2026-10-31-session.md)**：
+平衡点 **64 → 84 fps**，并给出闭合的预算模型（游戏 6.6 / NR 5.3 / AMDOF 1.4 ms）。
 
 宿主已迁到 **Magpie 0.6.11**（`Magpie-DLSS5-AMD-0.45`），以下都在实机验证过：
 
@@ -30,11 +33,17 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 |---|---|
 | lmxxf 运行时（对照实例） | 70–72 |
 | mochizuki，Motion 开（FidelityFX 光流） | 64 |
-| mochizuki，**Motion 关** | **68–75**（多次顶到游戏内 75 限帧） |
+| mochizuki，Motion 关 | 68–75 |
+| mochizuki，Motion 关 + History 关 | 75 |
+| mochizuki，**Motion 关 + History 关 + SR 上的 AMDOF 关** | **84** |
 
 差距来自**网络之外**的固定开销，不是运行时本身慢：网络我们比对方快 2.22 ms，
-但 4K FidelityFX 光流要多花约 2.3 ms/帧（`Motion=0` 即可去掉），另有约 1.4 ms 的
-4K 拷贝与 D3D12↔Vulkan 桥接。详见 [docs/findings.md](docs/findings.md)。
+但当时多背了一笔 4K 光流（`Motion` 使用 FFX 时约 2.3 ms/帧）与约 2.0 ms 的
+4K 拷贝 + D3D12↔Vulkan 桥接。把光流逐步挪出关键路径后（关 Motion → 关 `XeSS_SR`
+上无人消费的 AMDOF），本机已从 64 抬到 **84**，反超对照实例。
+
+实测分量（三个观测联立，误差 <1 帧）：**游戏 6.6 / NR 5.3 / AMDOF 1.4 ms**。
+详见 [docs/2026-10-31-session.md](docs/2026-10-31-session.md)。
 
 > 补帧同时开启时，NR 的成本会按倍率翻倍（2x 下每个内容帧跑 2 次，有逐帧计数为证），
 > 这是选 2x / 3x 时必须算进去的一项。

@@ -133,3 +133,23 @@ dist\nrtest.exe "D:\Magpie-NR-045" aco
 #   Backend publication CPU timing: samples=120 ... fenceAvgMs=...
 # 相邻两行的墙钟差 / 120 = 原生帧率
 ```
+
+---
+
+## 2026-10-31 补充：预算模型闭合
+
+三个观测（同机、同场景、4K 输出、NR 网络 1920×1080）联立，误差 <1 帧：
+
+| 状态 | 平衡点 | 每帧 |
+|---|---|---|
+| NR 开 + AMDOF 开 | 75 fps | 13.33 ms |
+| NR 开 + AMDOF 关 | 84 fps | 11.90 ms |
+| NR 关 + AMDOF 开 | 125 fps | 8.00 ms |
+
+```
+游戏自身 ≈ 6.6 ms   NR ≈ 5.3 ms（网络 3.3 + 桥接/拷贝 2.0）   AMDOF ≈ 1.4 ms
+```
+
+> 之前记录的光流“约 2.3 ms/帧”是估算，实测为 **1.4 ms**；`Motion` 关掉省的是 NR 内部
+> 那套 FFX 光流（2.3 ms），与 `XeSS_SR` 上那个 AMDOF（1.4 ms）是两笔不同的账。
+> 完整过程见 [2026-10-31-session.md](2026-10-31-session.md)。
