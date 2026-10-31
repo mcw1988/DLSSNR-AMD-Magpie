@@ -103,3 +103,22 @@ mochizuki  ：15.63 ms = 游戏 + 3.27 (网络) + 光流 + 4K 拷贝 + 桥接等
 
 `BridgePace` 是 ini-only 开关（不回写）：`=1` 恢复节奏等待（跳帧≈0），`=0` 保留 95fps 快路径。
 实测 `BridgePace=0` 时跳帧 2199/13920 ≈ 16%，75fps 以下跳帧归零、全屏闪随之消失。
+
+---
+
+## 2026-10-31 夜更新：里程碑与 XeSS 裁决
+
+- 同场景最终对比（双 addon 共存）：**mochizuki/ACO 107-108 fps vs lmxxf/HIP 78-80 fps**，
+  差距 27-30 fps。钩子从 `XeSS_SR` 换成纯 HLSL `AMDNR-ACO` 是关键一步。
+- **XeSS "需要 Intel ARC" 的疑问裁决**：目录原文只说"受支持的渲染 GPU"（Intel 补充说明
+  在 XeSSFG 条目）；且 `magpie.1.log` 有实证——`XeSS experimental D3D11/D3D12 backend
+  initialized (quality 106, Zero-MV, BGRA conversion=true): 3840x2054 -> 3840x2054`。
+  **9070XT 上 XeSS 后端确实跑起来了**，88→105-110 的提升=去掉这次真实推理（约 1.6-1.8 ms）。
+  但它 1:1、Zero-MV、experimental，**"是否真正有效（画质收益）"仍存疑**，列入方向 3 验证。
+- 钩子需求结构性结论（详见 [hook-requirements.md](hook-requirements.md)）：
+  OpenNR 挂 present 层→纯 HLSL 钩子即可；dlss5-amd 拦截 SR SDK 导出函数
+  （`ffxDispatch`/`xessD3D12Execute`）→必须用原生桩（`FSR4_SR`），否则空转。
+  五个 SR 桩的 HLSL 逐行等价，差异只在厂商 SDK。双 addon 可同时常驻。
+- 后续四个方向（session 文档 10.3）：① lmxxf 挂真 XeSS_SR 试 SR-NR/NR-SR 双管线；
+  ② mochizuki 提 NR 渲染率 vs lmxxf+XeSS_SR 放大到 4K 的帧数曲线/画质对比；
+  ③ 验证 XeSS_SR 是否真实有效；④ FG 适配（前三项完成后）。

@@ -1,0 +1,359 @@
+diff --git a/core/addon/neural.cpp b/core/addon/neural.cpp
+index ec49d5d..bd7214e 100644
+--- a/core/addon/neural.cpp
++++ b/core/addon/neural.cpp
+@@ -767,6 +767,11 @@ struct State
+         std::atomic<int> watchdogStandDown { 8 };   // ini-only as well: see NoteWatchdog
+         std::atomic<int> stallStandDownMs { 2000 }; // ini-only as well: see JobGate
+         std::atomic<bool> d3d12Wait { true };        // ini-only as well: see WaitForPreviousJob
++        // BridgePace: whether present waits for our own queue before returning. 1 is the pacing
++        // the bridge always had (no frame is skipped as pending); 0 lets the frame rate run ahead
++        // of the network, which is faster and leaves the frames it cannot keep up going out as
++        // duplicates. ini-only: the panel has no opinion on it yet.
++        std::atomic<bool> bridgePace { true };
+     } settings;
+     UINT loadedPasses = 0;
+ 
+@@ -986,6 +991,8 @@ struct State
+     ComPtr<ID3D12Resource> depthBest;
+     bool loggedDepth = false;
+     ComPtr<ID3D12Resource> composed;
++    ComPtr<ID3D12Resource> held;   // last finished picture, re-presented on frames the network sits out
++    bool heldReady = false;
+     ComPtr<ID3D12Resource> readbackBase, readbackNr;
+     bool measured = false;
+     // Set by the residual measurement when the network handed back its input: the effect is
+@@ -1063,7 +1070,11 @@ bool CompositionIsFresh(bool ranNetwork)
+     // make the mode flicker between two different pictures, which is worse than either.
+     if (g.settings.debugView.load() != 0 || g.settings.networkOutput.load())
+         return true;
+-    return ranNetwork && (g.activePasses != 0 || HeldOver());
++    // HeldOver counts on its own: a frame the job gate turned down still carries the last
++    // correction when the engine is async, and it must not fall back to the game's own picture.
++    // Once a finished picture exists it is re-presented on the frames the network sits out, so
++    // those are worth copying back too -- they are duplicates, not the game's own frame.
++    return (ranNetwork && g.activePasses != 0) || HeldOver() || g.heldReady;
+ }
+ 
+ int RuntimeTonemap()
+@@ -1261,6 +1272,10 @@ void LoadSettings()
+     g.settings.d3d12Wait.store(flag(L"D3D12Wait", true));
+     if (!g.settings.d3d12Wait.load())
+         Log("D3D12Wait=0: no present waits for the last evaluation, so expect more frames skipped as pending.");
++    g.settings.bridgePace.store(flag(L"BridgePace", true));
++    if (!g.settings.bridgePace.load())
++        Log("BridgePace=0: present does not wait for this add-on's queue, so the frame rate can "
++            "run ahead of the network and the frames it cannot keep up are re-presented.");
+     g.stage.store(static_cast<int>(num(L"Stage", 3.0f)));
+     g.events = static_cast<int>(num(L"Events", 31.0f));
+     // Enabled starts as StartOn says. StartOn began as a diagnostic in the family of Stage / Events /
+@@ -2061,6 +2076,10 @@ bool EnsureResources(UINT w, UINT h, DXGI_FORMAT outFormat, float scale)
+     }
+     if (outChanged && !CreateTexture(w, h, composeFormat, g.composed, "composed"))
+         return false;
++    if (outChanged && !CreateTexture(w, h, composeFormat, g.held, "held"))
++        return false;
++    if (outChanged)
++        g.heldReady = false;
+ 
+     g.outWidth = w;
+     g.outHeight = h;
+@@ -2870,6 +2889,28 @@ bool RecordNetwork(ID3D12GraphicsCommandList *&cmd, ID3D12Resource *colourSrc,
+         }
+     }
+ 
++    // On a frame the network sat out, the residual still holds the last one's answer. Composing it
++    // onto this frame's picture reads as a trail, and leaving the game's own frame in place reads
++    // as the flicker between two different pictures. Re-presenting the last finished picture is
++    // the third option: a duplicate frame, which is a stutter and not a strobe.
++    const bool stale = !(runNetwork && (g.activePasses != 0 || HeldOver())) && dbg == 0 && !g.settings.networkOutput.load();
++    if (stale && g.heldReady)
++    {
++        Barrier(cmd, g.held.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
++                D3D12_RESOURCE_STATE_COPY_SOURCE);
++        Barrier(cmd, g.composed.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
++                D3D12_RESOURCE_STATE_COPY_DEST);
++        cmd->CopyResource(g.composed.Get(), g.held.Get());
++        Barrier(cmd, g.held.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
++                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++        Barrier(cmd, g.composed.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
++                D3D12_RESOURCE_STATE_COPY_SOURCE);
++        if (outTarget != nullptr)
++            cmd->CopyResource(outTarget, g.composed.Get());
++        Barrier(cmd, g.composed.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
++                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++        return true;
++    }
+     Barrier(cmd, g.composed.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+     cmd->SetComputeRootSignature(g.root.Get());
+@@ -2878,15 +2919,13 @@ bool RecordNetwork(ID3D12GraphicsCommandList *&cmd, ID3D12Resource *colourSrc,
+     auto ctable = heap->GetGPUDescriptorHandleForHeapStart();
+     ctable.ptr += 8 * inc;
+     cmd->SetComputeRootDescriptorTable(0, ctable);
+-    // On a frame the network sat out, the residual still holds the last one's answer: compose with
+-    // no correction, because one aimed at where the picture used to be reads as a trail. Zero
+-    // intensity makes every step of the composition the identity, additive or ratio alike. A debug
+-    // view is exempt for the reason CompositionIsFresh gives: what it draws is a buffer.
+-    const bool stale = !(runNetwork && (g.activePasses != 0 || HeldOver())) && dbg == 0 && !g.settings.networkOutput.load();
++    // A stale compose with no correction at all keeps a debug view readable; it is also what runs
++    // before the first finished picture exists, where there is nothing to hold yet.
++    const bool staleCompose = stale;
+     // mochizuki's RenoDX stage hands back a finished picture with Intensity and Colour already in it:
+     // additive at full strength, unbounded, puts exactly that on the frame. A debug view keeps its own.
+     const bool finished = MzSelected() && dbg == 0;
+-    const float composeStrength = stale ? 0.0f : finished ? 1.0f : strength;
++    const float composeStrength = staleCompose ? 0.0f : finished ? 1.0f : strength;
+     // v0.6.0's packing, untouched: bit 0 is the filter and everything above it is the debug view.
+     UINT cdims[12] { w, h, nw, nh, static_cast<UINT>(encMode), 0, 0,
+                      (g.settings.bicubic.load() ? 1u : 0u) | (static_cast<UINT>(dbg) << 1),
+@@ -2906,6 +2945,15 @@ bool RecordNetwork(ID3D12GraphicsCommandList *&cmd, ID3D12Resource *colourSrc,
+     Barrier(cmd, g.composed.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+             D3D12_RESOURCE_STATE_COPY_SOURCE);
+ 
++    if (!staleCompose && g.held != nullptr)
++    {
++        Barrier(cmd, g.held.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
++                D3D12_RESOURCE_STATE_COPY_DEST);
++        cmd->CopyResource(g.held.Get(), g.composed.Get());
++        Barrier(cmd, g.held.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
++                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++        g.heldReady = true;
++    }
+     if (outTarget != nullptr)
+         cmd->CopyResource(outTarget, g.composed.Get());
+     Barrier(cmd, g.composed.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+diff --git a/core/addon/runtimes.inc b/core/addon/runtimes.inc
+index 6c78537..54fc1e2 100644
+--- a/core/addon/runtimes.inc
++++ b/core/addon/runtimes.inc
+@@ -233,9 +233,128 @@ void WaitForPreviousJob()
+ // After every submission that signals g.completion: the job is timed from here (stall_watch.h).
+ void ArmStallWatch() { stallwatch::Watch::Get().Arm(g.fence.Get(), g.completion); }
+ 
++// Stands down when the active Magpie scaling group belongs to another backend, so switching
++// groups in Magpie's UI cannot leave two runtimes fighting over the same frame. Reads
++// config\v4e\config.json beside Magpie.exe on a one-second cadence; the active group is the one
++// profiles[0] points at, matched by name first and by the effects it holds as the fallback --
++// the same rule nr-router applies, only now it does not need to be run by hand. A config it
++// cannot read keeps the previous decision, so a half-written file cannot flap the engine.
++bool GroupWantsThisBackend()
++{
++    static ULONGLONG lastCheck = 0;
++    static bool wanted = true;
++    const ULONGLONG now = GetTickCount64();
++    if (now - lastCheck < 1000)
++        return wanted;
++    lastCheck = now;
++
++    wchar_t exe[MAX_PATH] {};
++    GetModuleFileNameW(nullptr, exe, MAX_PATH);
++    std::wstring path(exe);
++    const size_t slash = path.find_last_of(L"\\/");
++    if (slash == std::wstring::npos)
++        return wanted;
++    path.resize(slash + 1);
++    path += L"config\\v4e\\config.json";
++
++    FILE* f = nullptr;
++    if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || f == nullptr)
++        return wanted;
++    std::string text;
++    char buf[1 << 16];
++    size_t got = 0;
++    while ((got = fread(buf, 1, sizeof buf, f)) > 0)
++        text.append(buf, got);
++    fclose(f);
++    if (text.empty())
++        return wanted;
++
++    const char* modesAt = strstr(text.c_str(), "\"scalingModes\"");
++    const char* scalingAt = strstr(text.c_str(), "\"scalingMode\"");
++    if (modesAt == nullptr || scalingAt == nullptr)
++        return wanted;
++    const char* colon = strchr(scalingAt, ':');
++    if (colon == nullptr)
++        return wanted;
++    const int index = atoi(colon + 1);
++    if (index < 0)
++        return wanted;
++
++    // A group name is a "name" whose value is followed by "effects"; effect entries carry
++    // "scalingType" or "parameters" instead, so they are not mistaken for groups.
++    auto quotedAfter = [](const char* at) -> std::string {
++        const char* p = strchr(at, ':');
++        if (p == nullptr)
++            return {};
++        while (*p != '\0' && *p != '"')
++            ++p;
++        if (*p == '\0')
++            return {};
++        ++p;
++        const char* e = strchr(p, '"');
++        return e == nullptr ? std::string() : std::string(p, e - p);
++    };
++    std::vector<std::string> groups;
++    std::vector<const char*> starts;
++    for (const char* p = modesAt; (p = strstr(p, "\"name\":")) != nullptr; ++p) {
++        const char* nextName = strstr(p + 1, "\"name\":");
++        const char* effects = strstr(p, "\"effects\"");
++        if (effects != nullptr && (nextName == nullptr || effects < nextName)) {
++            groups.push_back(quotedAfter(p));
++            starts.push_back(p);
++        }
++    }
++    if (index >= static_cast<int>(groups.size()))
++        return wanted;
++
++    const std::string& active = groups[index];
++    std::string lower;
++    for (char c : active)
++        lower += static_cast<char>(tolower(static_cast<unsigned char>(c)));
++
++    bool ours = false;
++    if (lower.find("mochi") != std::string::npos)
++        ours = true;
++    else if (lower.find("lmxxf") != std::string::npos || lower.find("dlss5") != std::string::npos)
++        ours = false;
++    else {
++        // Name says nothing: decide on which hook the group carries. AMDNR-ACO is this route
++        // (mochizuki, ACO kernels), AMDNR-HIP is lmxxf's (HIP). The older XeSS_SR / FSR*_SR
++        // stubs are still accepted so a group that was not migrated keeps working.
++        const char* begin = starts[index];
++        const char* end = index + 1 < static_cast<int>(starts.size()) ? starts[index + 1]
++                                                                     : text.c_str() + text.size();
++        const std::string slice(begin, end);
++        const bool acoHook = slice.find("AMDNR-ACO") != std::string::npos ||
++                             slice.find("XeSS_SR") != std::string::npos;
++        const bool hipHook = slice.find("AMDNR-HIP") != std::string::npos ||
++                             slice.find("FSR3_SR") != std::string::npos ||
++                             slice.find("FSR4_SR") != std::string::npos;
++        ours = acoHook && !hipHook;
++    }
++
++    static bool said = false;
++    if (ours != wanted || !said)
++        Log("group: \"%s\" is active; this add-on %s.", active.c_str(),
++            ours ? "runs it" : "stands down for another backend");
++    said = true;
++    wanted = ours;
++    return wanted;
++}
++
+ bool JobGate()
+ {
+     TickStats();
++    // Another backend owns the active scaling group (lmxxf's add-on, or a group with no NR in
++    // it): let its frame through untouched instead of both runtimes correcting the same one.
++    static bool stoodDown = false;
++    if (!GroupWantsThisBackend())
++    {
++        stoodDown = true;
++        return false;
++    }
++    if (std::exchange(stoodDown, false))
++        Log("group: this add-on is running the active group again.");
+     // One job the GPU held for seconds is the warning before the one that locks the machine
+     // (stall_watch.h): the network switches off before this frame records, the panel says why,
+     // and Enabled or the hotkey switches it on again with a fresh watch.
+@@ -267,6 +386,10 @@ bool JobGate()
+     if (!pending)
+         return !g.status.unavailable;  // either note may have just stood the add-on down
+     DeviceLost();
++    // Count the refusal like the engine-level one, so HeldOver() can keep the last correction on
++    // this frame instead of letting it go out raw -- a raw frame between two corrected ones is
++    // the strobe the user sees at high frame rates.
++    ++g.refusedRun;
+     if (++g.status.skipped % 120 == 1)
+         Log("network skipped: previous evaluation still pending (%llu skipped, %llu done). "
+             "Those frames go out as the game drew them; a correction aimed at an older "
+@@ -305,7 +428,7 @@ bool HeapStillRead(bool ran)
+     if (wrote)
+         return false;
+     if (ran)
+-        ++g.status.skipped, ++g_stats.now.heapHeld;
++        ++g.status.skipped, ++g_stats.now.heapHeld, ++g.refusedRun;
+     if (++held % 600 == 1)
+         Log("network skipped: the last list that read the descriptor heap is still on the GPU "
+             "(%llu such frames).", static_cast<unsigned long long>(held));
+diff --git a/core/transport/d3d11/D3D11Transport.inc b/core/transport/d3d11/D3D11Transport.inc
+index 850efdc..30214e5 100644
+--- a/core/transport/d3d11/D3D11Transport.inc
++++ b/core/transport/d3d11/D3D11Transport.inc
+@@ -208,16 +208,28 @@ void BridgePresent(device* dev, resource back, ID3D11Resource* source, bool from
+             g.bridge.failed = true;
+             return;
+         }
+-        g.bridge.game11ctx->CopyResource(g.bridge.stageIn11.Get(), source);
+-        g.bridge.game11ctx->CopyResource(g.bridge.in.on11.Get(), g.bridge.stageIn11.Get());
++        // One copy straight into the shared texture. The private staging pair kept the back
++        // buffer away from anything shared, but a direct copy is legal and saves one 4K hop.
++        g.bridge.game11ctx->CopyResource(g.bridge.in.on11.Get(), source);
+     }
+     g.guideDepth.ready = g.guideMotion.ready = false;
+     if (fromGame)
+         CrossGuides();
+-    // The copies above have to have landed before our device reads the shared textures. Waiting
+-    // here rather than queueing a GPU wait is what keeps the game's context clear of pending
+-    // cross-device dependencies -- see FlushAndWait11.
+-    if (!FlushAndWait11()) {
++    // The copies above have to have landed before our device reads the shared textures. The GPU
++    // timeline does that ordering: the game's context signals a shared fence and our queue waits
++    // on it, which costs nothing on the CPU. FlushAndWait11 is only the fallback, and it blocks
++    // the CPU until the game's whole context has drained -- that was most of the per-frame stall.
++    if (g.bridge.crossOn11 != nullptr && g.bridge.crossFence != nullptr) {
++        const UINT64 cross = ++g.bridge.crossValue;
++        if (FAILED(g.bridge.game11ctx->Signal(g.bridge.crossOn11.Get(), cross)) ||
++            FAILED(g.bridge.workQueue->Wait(g.bridge.crossFence.Get(), cross))) {
++            Log("bridge: cross fence signal/wait failed; falling back to a CPU wait.");
++            if (!FlushAndWait11()) {
++                g.bridge.failed = true;
++                return;
++            }
++        }
++    } else if (!FlushAndWait11()) {
+         g.bridge.failed = true;
+         return;
+     }
+@@ -300,24 +312,30 @@ void BridgePresent(device* dev, resource back, ID3D11Resource* source, bool from
+     g.bridge.workQueue->Signal(g.ringFence.Get(), g.ringSerial);
+     g.completion = ++g.serial;
+     g.bridge.workQueue->Signal(g.fence.Get(), g.completion);
++    ++g.bridge.backValue;
++    if (g.bridge.backFence != nullptr)
++        g.bridge.workQueue->Signal(g.bridge.backFence.Get(), g.bridge.backValue);
+     ArmStallWatch();
+ 
+-    // 3. and the finished image comes back, once our queue has actually produced it
+-    ++g.bridge.backValue;
+-    // A wait that gave up has stood the add-on down; FlushAndWait11 above already let go of the
+-    // back buffer, so nothing on the game's side is left holding it.
+-    if (!WaitForWorkQueue(g.completion))
++    // Pacing, not ordering: the shared fence above already keeps the copies in order. Waiting for
++    // our own queue here is what stops the next present from finding the last evaluation still
++    // pending, which is what turns the frame rate into skipped frames. BridgePace=0 drops the
++    // wait and lets the rate run ahead of the network.
++    if (g.settings.bridgePace.load() && !WaitForWorkQueue(g.completion))
+         return;
++
++    // 3. and the finished image comes back. Ordered on the GPU timeline the same way: the game's
++    // context waits on the shared fence before writing the back buffer, so the CPU never blocks
++    // on the network and the private staging pair is not needed on the way out either.
++    //
+     // Gated on freshness as well: without that, a skipped frame copies back whatever composition
+     // the last evaluated frame left in the shared texture -- a whole stale picture, which is a
+     // worse artefact than the stale correction this is here to avoid.
+     if (ok && CompositionIsFresh(runNetwork) && !g.noBackBuffer.load() &&
+-        g.bridge.stageOut11 != nullptr) {
+-        g.bridge.game11ctx->CopyResource(g.bridge.stageOut11.Get(), g.bridge.out.on11.Get());
+-        g.bridge.game11ctx->CopyResource(source, g.bridge.stageOut11.Get());
+-        // And this copy must not still be pending when the game resizes. It is the last thing
+-        // the add-on does to the swapchain, so draining here leaves nothing outstanding.
+-        FlushAndWait11();
++        g.bridge.out.on11 != nullptr) {
++        if (g.bridge.backOn11 != nullptr)
++            g.bridge.game11ctx->Wait(g.bridge.backOn11.Get(), g.bridge.backValue);
++        g.bridge.game11ctx->CopyResource(source, g.bridge.out.on11.Get());
+     }
+ 
+     // The immediate context keeps a deferred reference to every resource a recorded command

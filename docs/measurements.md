@@ -163,3 +163,14 @@ dist\nrtest.exe "D:\Magpie-NR-045" aco
 
 网络领先 1.8–1.9 ms，实机只领先 0.3 ms（+2 fps）。差额来自 D3D11→D3D12→Vulkan 的
 两次跨 API 跳与 4K staging 往返（`bridge: private staging 3840x2160 ...`）。
+
+### 2026-10-31 夜：双 addon 共存后的最终对比
+
+| 效果组 | 钩子 | 运行时 | 平衡点 |
+|---|---|---|---|
+| NR-mochizuki | AMDNR-ACO（纯 HLSL） | mochizuki / ACO | **107-108 fps** |
+| NR-lmxxf | FSR4_SR（原生桩） | lmxxf / HIP | 78-80 fps |
+
+XeSS 后端实证（`magpie.1.log:578`）：`XeSS experimental D3D11/D3D12 backend initialized
+(quality 106, Zero-MV, BGRA conversion=true): 3840x2054 -> 3840x2054`——9070XT 上跑起来了，
+但 1:1/Zero-MV/experimental，画质收益存疑。换 `AMDNR-ACO` 后该初始化计数为 0。

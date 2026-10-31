@@ -14,13 +14,22 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 
 ---
 
-预打包的实机目录见 **[Releases v0.2](https://github.com/mcw1988/magpie-nr/releases/tag/v0.2)**（核心包）
+预打包的实机目录见 **[Releases v0.3](https://github.com/mcw1988/magpie-nr/releases/tag/v0.3)**（核心包）
 与 v0.1 的 lmxxf 权重分卷，解到同一目录即可运行。
 
-## 状态（v0.2，2026-10-31 晚）
+## 状态（v0.3，2026-10-31 夜）
 
-当日调优全过程见 **[docs/2026-10-31-session.md](docs/2026-10-31-session.md)**：
-平衡点 **64 → 84 fps**，并给出闭合的预算模型（游戏 6.6 / NR 5.3 / AMDOF 1.4 ms）。
+当日调优全过程见 **[docs/2026-10-31-session.md](docs/2026-10-31-session.md)**。
+最终里程碑（同场景、NR 1080 档、双 addon 共存）：
+
+| 效果组 | 钩子 | 平衡点 |
+|---|---|---|
+| NR-mochizuki | `AMDNR-ACO`（纯 HLSL） | **107-108 fps** |
+| NR-lmxxf | `FSR4_SR`（原生桩） | 78-80 fps |
+
+调优路径：64 → 84（预算模型闭合）→ 88（桥接 GPU 围栏 + BridgePace）→ 107-108
+（钩子换纯 HLSL，去掉每帧一次的真实 XeSS 推理）。钩子需求研究见
+**[docs/hook-requirements.md](docs/hook-requirements.md)**。
 
 宿主已迁到 **Magpie 0.6.11**（`Magpie-DLSS5-AMD-0.45`），以下都在实机验证过：
 
@@ -64,7 +73,7 @@ mochizuki  3.4     (网络, ACO)   + ≈1.9 (D3D11→D3D12→Vulkan)    = 5.3 ->
 |---|---|---|
 | 在 Magpie 里按 Home 打不开 ReShade 面板 | Magpie 的输出窗口是 `WS_EX_NOACTIVATE` + 渲染子窗口 `WS_EX_TRANSPARENT`，KeyEvent 根本到不了 ReShade；ReShade 的输入完全由窗口消息驱动，自己没装全局钩子 | `overlay-input` 用底层钩子把键鼠**直接贴进 swapchain 窗口** |
 | Home 能开，但菜单里点不动 | ReShade 打开覆盖层后会屏蔽 `GetAsyncKeyState`、丢弃发给窗口的 `WM_MOUSEMOVE`；且投递消息里 `MSG.pt` 等于 `lParam`，会被二次 `ScreenToClient` 偏移 | 以底层鼠标事件为准 + 未受屏蔽的状态轮询兜底 + 统一按屏幕坐标投递 + 按帧拆分按下/抬起 |
-| 两条 NR 运行时不能同时挂 | 两个 add-on 都在改帧，同时加载会互相抢帧 | `nr-router` 按效果组把不用的那个改名成 `*.off`，物理上只加载一个 |
+| 两条 NR 运行时不能同时挂 | 两个 add-on 都在改帧，同时加载会互相抢帧 | 双 addon 共存 + OpenNR 自动让位（`GroupWantsThisBackend`）：按组名/钩子名判定归属；lmxxf 无 SDK 调用时自然空转。见 [docs/hook-requirements.md](docs/hook-requirements.md) |
 | 换了效果组，跑的却还是上一个运行时 | ReShade 只在**进程启动时**扫描 `*.addon64` | 同上：切换 = 换文件 + 重启 Magpie；`nr-router --restart` 一条命令做完 |
 | 换完组 NR 就"消失"，画面没降噪 | OpenNR 收到设备销毁后置为 off 且不自动恢复，而 Magpie 每次停缩放都会销毁设备 | `nr-router --restart` 现在**无条件重启**（不再只在文件变化时重启） |
 | ACO 明明有文件却不生效 | mochizuki 的 ACO 判定不兼容非 ASCII 路径 | 部署目录必须是纯 ASCII（如 `D:\Magpie-NR-045`） |
@@ -106,8 +115,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build-all.ps1
 `XeSS_FrameGeneration` + `multiplier`，等价）：
 
 ```
-NR-lmxxf      = FSR4\FSR4_SR   (+ FrameRate_Filter, XeSS FG)
-NR-mochizuki  = XeSS\XeSS_SR   (+ FrameRate_Filter, XeSS FG)
+NR-lmxxf      = AMDNR-HIP 或 FSR4\FSR4_SR（原生桩，lmxxf 钩 SDK 必需）
+NR-mochizuki  = AMDNR-ACO\AMDNR-ACO（纯 HLSL，本项目钩子）
 ```
 
 **换组之后必须重启 Magpie**（跑 `nr-router.cmd` 或托盘退出再开），否则 NR 会停在 off 状态。
@@ -129,6 +138,7 @@ dist/               预编译产物（由本仓库源码构建，见 dist/README
 - [docs/usage.md](docs/usage.md) — 目录布局、效果组、切换运行时、日志
 - [docs/measurements.md](docs/measurements.md) — 所有实测数字与采集方式
 - [docs/findings.md](docs/findings.md) — 已确认的结论、**已撤回的结论**、未解问题
+- [docs/hook-requirements.md](docs/hook-requirements.md) — 钩子需求研究：两条运行时为何用不同效果器、双 addon 共存
 - [docs/troubleshooting.md](docs/troubleshooting.md) — 常见故障与处理
 - [docs/build.md](docs/build.md) — 构建
 - [docs/upstream.md](docs/upstream.md) — 上游版本与获取方式
