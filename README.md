@@ -14,8 +14,8 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 
 ---
 
-预打包的实机目录见 **[Releases v0.1](https://github.com/mcw1988/magpie-nr/releases/tag/v0.1)**（两个分卷，
-解到同一目录即可运行）。
+预打包的实机目录见 **[Releases v0.2](https://github.com/mcw1988/magpie-nr/releases/tag/v0.2)**（核心包）
+与 v0.1 的 lmxxf 权重分卷，解到同一目录即可运行。
 
 ## 状态（v0.2，2026-10-31 晚）
 
