@@ -153,3 +153,13 @@ dist\nrtest.exe "D:\Magpie-NR-045" aco
 > 之前记录的光流“约 2.3 ms/帧”是估算，实测为 **1.4 ms**；`Motion` 关掉省的是 NR 内部
 > 那套 FFX 光流（2.3 ms），与 `XeSS_SR` 上那个 AMDOF（1.4 ms）是两笔不同的账。
 > 完整过程见 [2026-10-31-session.md](2026-10-31-session.md)。
+
+### 同条件对照：lmxxf 82 vs mochizuki 84
+
+| 运行时 | 后端 | 平衡点 | 网络 | 桥接 | NR 总成本 |
+|---|---|---|---|---|---|
+| lmxxf | HIP | 82 fps | 5.2–5.3 ms | ≈0.3–0.4 ms | 5.6 ms |
+| mochizuki | ACO/Vulkan | **84 fps** | 3.4 ms | ≈1.9 ms | 5.3 ms |
+
+网络领先 1.8–1.9 ms，实机只领先 0.3 ms（+2 fps）。差额来自 D3D11→D3D12→Vulkan 的
+两次跨 API 跳与 4K staging 往返（`bridge: private staging 3840x2160 ...`）。
