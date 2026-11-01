@@ -234,6 +234,12 @@ bool FileExists(const std::wstring& path)
     return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
 
+// Either name counts as installed: the router itself is the thing that renames them.
+bool Available(const std::wstring& dir, const wchar_t* name)
+{
+    return FileExists(dir + L"\\" + name) || FileExists(dir + L"\\" + name + kOffSuffix);
+}
+
 // Magpie 0.6.x keeps its live settings in config\v4e\config.json; config\config.json is the
 // legacy file that only gets read during migration. Prefer whichever of the two actually has a
 // scaling-mode list, so the router follows the group the user picked in the current build.
@@ -317,6 +323,15 @@ int Apply(const std::wstring& dir, const Decision& d, bool dryRun)
     }
     if (d.backend == Backend::Mochinr && !d.hasFsr)
         std::wprintf(L"     注意: 这个组没有 FSR 效果器，mochinr 钩不到 ffxDispatch，实际不会降噪。\n");
+
+    const wchar_t* wanted = d.backend == Backend::Mochinr      ? kMochinrAddon
+                          : d.backend == Backend::Mochizuki    ? kMochizukiAddon
+                                                               : kLmxxfAddon;
+    if (!Available(dir, wanted)) {
+        std::wprintf(L"  !! %s 既不在也不是 .off，缺文件\n"
+                     L"     本次不动任何文件（否则会把唯一可用的后端也停掉）。\n", wanted);
+        return 2;
+    }
 
     // Exactly one backend: the two FSR add-ons would fight over the same export, and passing two
     // denoisers down the chain is wrong even where they would not collide.
