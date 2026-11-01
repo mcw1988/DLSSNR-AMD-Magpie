@@ -67,13 +67,19 @@ Magpie 每次**停止缩放**都会销毁 D3D12 设备，OpenNR 收到后把自�
 处理：换完组跑一次 `nr-router.cmd`（它会重启 Magpie），或从托盘退出 Magpie 再打开。
 "停掉捕获再开始"不够——那只是又销毁了一次设备。
 
-## 切到 3x 补帧后出现 D3D12 红字 / 一直不恢复
+## 停止效果组再启用后 NR 失效 / ReShade enable 旁红字
 
-3x 下每个内容帧会被呈现 3 次，NR 也就评估 3 次。4K 上这个量已经超过桥接的在飞预算
-（addon 里有 `four jobs already in flight`、`network skipped: the last list that read the
-descriptor heap is still on the GPU` 这类保护），随后停机并报设备错误。
+在游戏窗口点叉号关闭效果组再重新启用（或快速停止/开始缩放），ReShade enable
+按钮旁出现红字报错，NR 不再生效。**与补帧倍率无关**（x2 即可复现；早期记为
+"3x 补帧导致"是误判）。根因：效果组停止时 D3D12 设备引用泄漏、未干净自毁
+（ReShade 报 `Reference count for ID3D12Device2 ... is inconsistent (35)`），
+OpenNR 见设备销毁后置 off 且不自愈。
 
-先退回 2x；确实要用 3x，需要先把 NR 单次成本压下来（`Scale`、`Motion`）。
+处理：完全退出 Magpie 进程（托盘退出）再启动，然后启用效果组。仅"停止缩放
+再开始"不够——那正会触发本问题。
+
+（另注：3x 补帧的真实代价是每内容帧评估三次，会打到桥接在飞预算
+`four jobs already in flight` 类保护，那是性能上限，不是本错误的成因。）
 
 ## ACO 明明有文件却不生效
 

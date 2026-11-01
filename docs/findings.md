@@ -59,9 +59,12 @@ mochizuki  ：15.63 ms = 游戏 + 3.27 (网络) + 光流 + 4K 拷贝 + 桥接等
    FidelityFX 失败时自动接管）。
 2. **lmxxf 到底跑几次**：它没有逐帧日志，只有 `on_present` 符号。若它确实每个呈现帧都跑，
    说明它单次足够便宜；若只跑一次，说明挂载点不同，需要查它绑的是哪个 swapchain。
-3. **x3 下的 D3D12 报错**：怀疑是每次内容帧 3 次评估把桥接的在飞预算打满
-   （addon 内有 `four jobs already in flight`、`network skipped: the last list that read the
-   descriptor heap is still on the GPU` 这类保护）。未验证。
+3. **x3 下的 D3D12 报错**（2026-11-01 归因修正）：该红字**与 3x 补帧无关**，
+   实为"停止效果组再启用"触发——效果组停止时 D3D12 设备引用未干净释放
+   （ReShade：`Reference count for ID3D12Device2 ... is inconsistent (35)`），
+   同进程重启效果组即红字报错、NR 失效，重启 Magpie 进程才恢复；x2 可复现。
+   3x 的真实影响是每内容帧评估三次（`four jobs already in flight` 类保护会被
+   打到），那是预算问题，不是本错误的成因。
 4. **停机状态能否自愈**：目前只能重启进程。若 OpenNR 有未暴露的恢复开关，值得找。
 
 ---
