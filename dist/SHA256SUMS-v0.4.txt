@@ -1,2 +1,3 @@
-75b388c5c9415f2f50f2132a6546f797df938f9dfb7f0f73a6cf1bf34a732c91  Magpie-NR-v0.4-mochinr.zip
+04f8a3eca0d84e14d25c4ecab89f6e5a8c6a0b2e9e83fe60d2b0cdcc0c4f3c76  Magpie-NR-v0.4-mochinr.zip
 b48c129f1db5f152b70c6a1ab833d792deb3589e463eb28cd06f24746a615069  mochinr.addon64
+24a9d0d4c39e31497106eecaf3650317d657b0ff2cb6af31a0a0e353f47b4c9d  nr-router.exe
