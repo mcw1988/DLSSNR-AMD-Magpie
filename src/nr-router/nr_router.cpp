@@ -1,12 +1,25 @@
 // nr-router: keeps exactly one neural-rendering add-on active, chosen by the Magpie effect group.
 //
-//   effect group contains XeSS\XeSS_SR   -> amd-nr.addon64      (mochizuki, Vulkan)
-//   effect group contains FSR3\FSR3_SR   -> dlss5-amd.addon64   (lmxxf, HIP)
-//   a group that contains both           -> refused, nothing touched
-//   anything else                        -> left alone
+// Three backends now exist, and they must never be loaded together: two of them hook the same
+// ffxDispatch export, and the third is a second denoiser on a different stage of the chain.
+//
+//   amd-nr.addon64    mochizuki (Vulkan), ReShade present layer            -> XeSS\XeSS_SR chains
+//   mochinr.addon64   mochizuki (Vulkan), inside the FFX upscale call      -> FSR chains, v0.4+
+//   dlss5-amd.addon64 lmxxf (HIP),       inside the FFX upscale call      -> FSR chains
+//
+// Group name markers win over the effect list, because a chain can carry no SR effect at all:
+//
+//   name contains "mochinr" or "preupscale"      -> mochinr.addon64
+//   name contains "lmxxf" or "dlss5"             -> dlss5-amd.addon64
+//   name contains "mochi" (but not "mochinr")    -> amd-nr.addon64
+//   more than one of the above                   -> refused, nothing touched
+//
+// Without a marker the effect list decides: XeSS_SR -> amd-nr, FSR3/FSR4_SR -> dlss5-amd.
+// An unmarked FSR chain is genuinely ambiguous (both FSR backends hook the same call), so it keeps
+// the older lmxxf routing and says so; name the group "mochinr"/"preupscale" to pick the other one.
 //
 // ReShade loads *.addon64 from its own directory at start, so "active" means "named .addon64";
-// the other one is renamed to *.off. A change therefore applies the next time Magpie starts.
+// the others are renamed to *.off. A change therefore applies the next time Magpie starts.
 //
 // Usage:
 //   nr-router [--dry-run] [--watch] [--restart] [--dir <Magpie dir>]
@@ -28,20 +41,22 @@
 
 namespace {
 
-const wchar_t* kMochizukiAddon = L"amd-nr.addon64";
+const wchar_t* kMochizukiAddon = L"amd-nr.addon64";     // OpenNR, present layer
+const wchar_t* kMochinrAddon = L"mochinr.addon64";      // v0.4, inside the FSR slot
 const wchar_t* kLmxxfAddon = L"dlss5-amd.addon64";
 const wchar_t* kOffSuffix = L".off";
 
-enum class Backend { None, Mochizuki, Lmxxf, Conflict };
+enum class Backend { None, Mochizuki, Mochinr, Lmxxf, Conflict };
 
 struct Decision {
     Backend backend = Backend::None;
     std::wstring modeName;
     int modeIndex = -1;
     bool hasXess = false;
-    bool hasFsr3 = false;
+    bool hasFsr = false;      // FSR3_SR or FSR4_SR: the stage mochinr and lmxxf both hook
     bool byName = false;
-    std::wstring note;
+    std::wstring note;        // non-empty means "refused": Apply() returns 2
+    std::wstring hint;        // informational only, never changes the exit code
 };
 
 std::string ReadFileUtf8(const std::wstring& path)
@@ -149,9 +164,9 @@ Decision Decide(const std::wstring& configPath)
     // The names are stored with a doubled backslash, so match the escaped text.
     d.hasXess = mode.find("\"XeSS\\\\XeSS_SR\"") != std::string::npos;
     // lmxxf's group has been FSR3_SR in some packs and FSR4_SR in others; either one means "the
-    // FFX super-resolution stage is on the chain", which is what lmxxf hooks.
-    d.hasFsr3 = mode.find("\"FSR3\\\\FSR3_SR\"") != std::string::npos ||
-                mode.find("\"FSR4\\\\FSR4_SR\"") != std::string::npos;
+    // FFX super-resolution stage is on the chain", which is what lmxxf and mochinr both hook.
+    d.hasFsr = mode.find("\"FSR3\\\\FSR3_SR\"") != std::string::npos ||
+               mode.find("\"FSR4\\\\FSR4_SR\"") != std::string::npos;
 
     // A group can name its backend even when the chain has no SR effect at all. The Bicubic
     // chains added for 4K keep NR as a ReShade add-on, so "contains XeSS_SR" is no longer a
@@ -159,32 +174,55 @@ Decision Decide(const std::wstring& configPath)
     std::wstring lowered = d.modeName;
     for (wchar_t& c : lowered)
         c = static_cast<wchar_t>(towlower(c));
-    const bool nameMochi = lowered.find(L"mochi") != std::wstring::npos;
+    // "mochinr" contains "mochi", so the longer marker is tested first and then excluded from the
+    // shorter one; "preupscale" is accepted as a synonym because it describes where mochinr sits.
+    const bool nameMochinr = lowered.find(L"mochinr") != std::wstring::npos ||
+                             lowered.find(L"preupscale") != std::wstring::npos ||
+                             lowered.find(L"pre-upscale") != std::wstring::npos;
+    // Strip the longer marker before looking for the shorter one, otherwise "NR-mochinr-mochizuki"
+    // reads as a single marker instead of the contradiction it is.
+    std::wstring withoutMochinr = lowered;
+    for (size_t at = withoutMochinr.find(L"mochinr"); at != std::wstring::npos;
+         at = withoutMochinr.find(L"mochinr"))
+        withoutMochinr.erase(at, 7);
+    const bool nameMochi = withoutMochinr.find(L"mochi") != std::wstring::npos;
     const bool nameLmxxf = lowered.find(L"lmxxf") != std::wstring::npos ||
                            lowered.find(L"dlss5") != std::wstring::npos;
 
-    if (nameMochi && !nameLmxxf) {
+    const int markers = (nameMochinr ? 1 : 0) + (nameMochi ? 1 : 0) + (nameLmxxf ? 1 : 0);
+    if (markers > 1) {
+        d.backend = Backend::Conflict;
+        d.byName = true;
+        d.hint = L"组名里同时出现了两个后端的标记，无法判断，本次不动任何文件。";
+        return d;
+    }
+    if (nameMochinr) {
+        d.backend = Backend::Mochinr;
+        d.byName = true;
+        return d;
+    }
+    if (nameMochi) {
         d.backend = Backend::Mochizuki;
         d.byName = true;
         return d;
     }
-    if (nameLmxxf && !nameMochi) {
+    if (nameLmxxf) {
         d.backend = Backend::Lmxxf;
-        d.byName = true;
-        return d;
-    }
-    if (nameMochi && nameLmxxf) {
-        d.backend = Backend::Conflict;
         d.byName = true;
         return d;
     }
 
-    if (d.hasXess && d.hasFsr3) {
+    if (d.hasXess && d.hasFsr) {
         d.backend = Backend::Conflict;
+        d.hint = L"这个组同时挂了 XeSS_SR 和 FSR 效果器，按规则不允许。";
     } else if (d.hasXess) {
         d.backend = Backend::Mochizuki;
-    } else if (d.hasFsr3) {
+    } else if (d.hasFsr) {
+        // Both FSR backends hook ffxDispatch, so an unmarked chain cannot be told apart from the
+        // effect list alone. Keep the older lmxxf routing and say how to ask for the other one.
         d.backend = Backend::Lmxxf;
+        d.hint = L"组名没有后端标记，按 FSR 效果器默认判给 lmxxf；"
+                 L"要跑 mochinr 请在组名里写 mochinr（或 preupscale）。";
     } else {
         d.backend = Backend::None;
     }
@@ -242,8 +280,9 @@ bool Sync(const std::wstring& dir, const wchar_t* name, bool wanted, bool dryRun
 const wchar_t* BackendName(Backend b)
 {
     switch (b) {
-    case Backend::Mochizuki: return L"mochizuki (Vulkan, 跑在 amd-nr.addon64 里)";
-    case Backend::Lmxxf: return L"lmxxf (HIP, 跑在 dlss5-amd.addon64 里)";
+    case Backend::Mochizuki: return L"mochizuki (Vulkan, amd-nr.addon64，present 层)";
+    case Backend::Mochinr: return L"mochizuki (Vulkan, mochinr.addon64，放大之前)";
+    case Backend::Lmxxf: return L"lmxxf (HIP, dlss5-amd.addon64，放大之前)";
     case Backend::Conflict: return L"冲突";
     default: return L"无（这个效果组不挂 NR）";
     }
@@ -257,26 +296,33 @@ int Apply(const std::wstring& dir, const Decision& d, bool dryRun)
         std::wprintf(L"  按组名判定（链里可以不挂 SR 效果）\n");
     else
         std::wprintf(L"  含 XeSS\\XeSS_SR: %s   含 FSR3/FSR4_SR: %s\n", d.hasXess ? L"是" : L"否",
-                     d.hasFsr3 ? L"是" : L"否");
+                     d.hasFsr ? L"是" : L"否");
     if (!d.note.empty()) {
         std::wprintf(L"  %s\n", d.note.c_str());
         return 2;
     }
 
     if (d.backend == Backend::Conflict) {
-        std::wprintf(L"  !! 这个效果组同时挂了 FSR3\\FSR3_SR 和 XeSS\\XeSS_SR，按规则不允许。\n"
-                     L"     请把其中一个从组里删掉；本次不动任何文件。\n");
+        std::wprintf(L"  !! %s\n     本次不动任何文件。\n",
+                     d.hint.empty() ? L"这个效果组同时挂了 FSR 和 XeSS_SR，按规则不允许。" : d.hint.c_str());
         return 2;
     }
 
     std::wprintf(L"  => 应该运行: %s\n", BackendName(d.backend));
+    if (!d.hint.empty())
+        std::wprintf(L"     注: %s\n", d.hint.c_str());
     if (d.backend == Backend::None) {
         std::wprintf(L"     这个组和 NR 无关，保持现状。\n");
         return 0;
     }
+    if (d.backend == Backend::Mochinr && !d.hasFsr)
+        std::wprintf(L"     注意: 这个组没有 FSR 效果器，mochinr 钩不到 ffxDispatch，实际不会降噪。\n");
 
+    // Exactly one backend: the two FSR add-ons would fight over the same export, and passing two
+    // denoisers down the chain is wrong even where they would not collide.
     bool problem = false;
     bool changed = false;
+    changed |= Sync(dir, kMochinrAddon, d.backend == Backend::Mochinr, dryRun, problem);
     changed |= Sync(dir, kMochizukiAddon, d.backend == Backend::Mochizuki, dryRun, problem);
     changed |= Sync(dir, kLmxxfAddon, d.backend == Backend::Lmxxf, dryRun, problem);
 

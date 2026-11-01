@@ -48,6 +48,8 @@ D3D12 ↔ Vulkan 围栏造成的帧内串行）；仅 1080p 实测；面板版�
 后续方向：优化 UI、修正性能（消除串行而非降低质量）、适配 1080p 以上输入、调优 NR 风味、适配 MFG。
 
 配套文件：`src/mochinr/`（源码 + 构建脚本 + 运行时扩展 ABI 头）、`dist/mochinr.addon64`。
+换后端不再需要手改文件名：`nr-router.exe` 已按组名在三个 add-on（amd-nr / mochinr / dlss5-amd）
+之间互斥切换，规则见 [docs/mochinr.md](docs/mochinr.md) 第 6 节。
 
 ## 状态（v0.3，2026-10-31 夜）
 

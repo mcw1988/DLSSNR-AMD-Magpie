@@ -82,14 +82,36 @@ ReShade Home 页签下的 **mochinr 降噪** 面板（中文，四页签）：
 - **AMOF 光流**：补帧若需要光流，光流应当配置在补帧效果上而非 NR 上；该链路**未验证**，
   闪烁是否会随位置改变而消失也**不确定**。
 
-## 6. 已知问题
+## 6. 路由器（nr-router）
+
+ReShade 只在启动时加载 `*.addon64`，而三个后端的 add-on **绝不能同时存在**——其中两个钩的是同一个
+`ffxDispatch` 导出。`nr-router` 按 Magpie 当前效果组把另外两个改名为 `.off`，只留一个：
+
+| 组名标记（优先） | 启用 | 位置 |
+|---|---|---|
+| `mochinr` / `preupscale` | `mochinr.addon64` | FFX 放大之前（v0.4） |
+| `lmxxf` / `dlss5` | `dlss5-amd.addon64` | FFX 放大之前（lmxxf） |
+| `mochi`（且不含 `mochinr`） | `amd-nr.addon64` | ReShade present 层（OpenNR） |
+
+没有组名标记时按效果器判定：`XeSS\XeSS_SR` → `amd-nr`；`FSR3/FSR4_SR` → **`dlss5-amd`**。
+
+**为什么 FSR 的默认不是 mochinr**：两个 FSR 后端钩的是同一个 `ffxDispatch`，仅看效果链无法区分，
+所以无标记时保留旧行为（lmxxf）并打印提示；要跑 mochinr，把组名写成 `mochinr` 或 `preupscale`。
+组名同时出现两个后端标记、或链里同时挂了 `XeSS_SR` 与 FSR → **拒绝，不动任何文件**。
+
+```
+nr-router --dry-run           只报告判定，不动文件
+nr-router --watch --restart   跟随效果组切换，并重启 Magpie 让新 add-on 生效
+```
+
+## 7. 已知问题
 
 1. **性能**：降低网络渲染率会降低 GPU 负载与功率，但**帧数不升**；游戏内限帧始终高于
    捕获/输出约 15–20 帧（已排除游戏限帧干扰）。嫌疑：D3D12 ↔ Vulkan 围栏造成的帧内串行。
 2. **输入分辨率**：仅 1080p 实测；更高输入未验证。
 3. **UI**：面板可用，但版式与术语仍待打磨。
 
-## 7. 后续方向
+## 8. 后续方向
 
 - 优化 UI 界面（版式、分组、术语）
 - 修正性能表现（消除帧内串行，而非降低质量）
