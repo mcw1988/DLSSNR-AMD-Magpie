@@ -16,7 +16,9 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 
 预打包的实机目录见 **[Releases v0.3](https://github.com/mcw1988/magpie-nr/releases/tag/v0.3)**（核心包）
 与 v0.1 的 lmxxf 权重分卷，解到同一目录即可运行。v0.4 起多一个自包含的 add-on
-`mochinr.addon64`（见下）。
+`mochinr.addon64`（见下），以 **[Releases v0.4](https://github.com/mcw1988/magpie-nr/releases/tag/v0.4)**
+的 `Magpie-NR-v0.4-mochinr.zip` 形式分发——它是叠加在 v0.3 核心包之上的覆盖包，
+内含 `mochinr.addon64`、默认 `mochinr.ini` 与安装说明。
 
 ## 状态（v0.4，2026-11-01 夜）
 
