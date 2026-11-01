@@ -104,14 +104,28 @@ nr-router --dry-run           只报告判定，不动文件
 nr-router --watch --restart   跟随效果组切换，并重启 Magpie 让新 add-on 生效
 ```
 
-## 7. 已知问题
+> v0.4 起不再随包发布 present 层的 `amd-nr.addon64`，`mochi` 那条规则只为兼容旧安装保留：
+> 目录里没有该文件时，路由器会拒绝执行（退出码 2）而不是把另外两个后端停掉。
+
+## 7. 打包
+
+发布包由 `scripts/pack-release.py` 生成，排除项与 v0.3 一致：不含 lmxxf 权重（`DLSS5-AMD`，约 835 MB）、
+不含 NVIDIA 的 NGX/NPP/NVVFX 大件（约 1 GB）、不含 `sources/`、`cache/`、`_dev-src/` 与历代调试残留
+（日志、`.bak`/`.orig`/`.prev`、探针与 shim）。config 只带 `config/config.json` 与
+`config/v4e/config.json` 两个活文件，备份与 recovery 文件不进包。
+
+```
+python scripts/pack-release.py --src "D:/Magpie-NR-045" --out dist/Magpie-NR-045-v0.4-core.zip
+```
+
+## 8. 已知问题
 
 1. **性能**：降低网络渲染率会降低 GPU 负载与功率，但**帧数不升**；游戏内限帧始终高于
    捕获/输出约 15–20 帧（已排除游戏限帧干扰）。嫌疑：D3D12 ↔ Vulkan 围栏造成的帧内串行。
 2. **输入分辨率**：仅 1080p 实测；更高输入未验证。
 3. **UI**：面板可用，但版式与术语仍待打磨。
 
-## 8. 后续方向
+## 9. 后续方向
 
 - 优化 UI 界面（版式、分组、术语）
 - 修正性能表现（消除帧内串行，而非降低质量）

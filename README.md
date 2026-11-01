@@ -14,16 +14,20 @@ ReShade 覆盖层在 Magpie 里真正可用**。
 
 ---
 
-预打包的实机目录见 **[Releases v0.3](https://github.com/mcw1988/magpie-nr/releases/tag/v0.3)**（核心包）
-与 v0.1 的 lmxxf 权重分卷，解到同一目录即可运行。v0.4 起多一个自包含的 add-on
-`mochinr.addon64`（见下），以 **[Releases v0.4](https://github.com/mcw1988/magpie-nr/releases/tag/v0.4)**
-的 `Magpie-NR-v0.4-mochinr.zip` 形式分发——它是叠加在 v0.3 核心包之上的覆盖包，
-内含 `mochinr.addon64`、默认 `mochinr.ini` 与安装说明。
+预打包的实机目录见 **[Releases v0.4](https://github.com/mcw1988/magpie-nr/releases/tag/v0.4)**
+的 `Magpie-NR-045-v0.4-core.zip`——**一份包，解压即用**，自带 mochizuki 权重。
+lmxxf 权重体积太大不在包内，需要时另取
+**[v0.1 的权重分卷](https://github.com/mcw1988/magpie-nr/releases/tag/v0.1)**
+（v0.2 / v0.3 的 Release 都只传了核心包，没有权重分卷）。
 
 ## 状态（v0.4，2026-11-01 夜）
 
 **mochizuki 换了挂载位置**：不再跑在 present 层，而是接进 **FFX 放大调用内部、放大之前**，
 和 lmxxf 站在同一条挂载点上。实现与踩坑记录见 **[docs/mochinr.md](docs/mochinr.md)**。
+
+**旧路线已退役**：present 层的 `amd-nr.addon64` 不再随包发布，依赖它的两个效果组（`NR-mochizuki`、
+`NR-mochizuki-FG`）也从配置里删掉了。mochizuki 现在只有一条挂载路线。包内效果组剩三个：
+`NR-preupscale`（默认）、`NR-lmxxf`、`仅补帧`。
 
 ```
 v0.3:  捕获 → 放大(FSR) → 帧率过滤 → 补帧 → present ← (NR 在这里，每帧 N 次)
@@ -47,9 +51,10 @@ D3D12 ↔ Vulkan 围栏造成的帧内串行）；仅 1080p 实测；面板版�
 
 后续方向：优化 UI、修正性能（消除串行而非降低质量）、适配 1080p 以上输入、调优 NR 风味、适配 MFG。
 
-配套文件：`src/mochinr/`（源码 + 构建脚本 + 运行时扩展 ABI 头）、`dist/mochinr.addon64`。
-换后端不再需要手改文件名：`nr-router.exe` 已按组名在三个 add-on（amd-nr / mochinr / dlss5-amd）
-之间互斥切换，规则见 [docs/mochinr.md](docs/mochinr.md) 第 6 节。
+配套文件：`src/mochinr/`（源码 + 构建脚本 + 运行时扩展 ABI 头）、`dist/mochinr.addon64`、
+`scripts/pack-release.py`（打发布包，排除项与 v0.3 的政策一致）。
+换后端不再需要手改文件名：`nr-router.exe` 按组名在 add-on 之间只留一个启用，
+规则见 [docs/mochinr.md](docs/mochinr.md) 第 6 节。
 
 ## 状态（v0.3，2026-10-31 夜）
 
