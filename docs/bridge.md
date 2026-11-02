@@ -275,6 +275,36 @@ full-before 24.401 ms / pure-HIP 24.269 ms / full-after 24.548 ms   （同一输
 
 ---
 
+### 8.5 为什么这条桥必须存在——以及"直接 D3D12 → Vulkan"是否可能（2026-11-02 追问）
+
+先澄清出身：**`FSR3Upscaler.cpp` 不在 Blinue/Magpie 里**。Blinue 上游（`dev` 分支，GPL-3.0，
+★16k）的源码树里没有 FSR3Upscaler、没有任何 FFX/FidelityFX 文件，甚至**没有一处 D3D12**——
+设备层就是 `ID3D11Device5 + ID3D11DeviceContext4`（`DeviceResources.h`），效果链全是 D3D11
+像素着色器。`FSR3Upscaler` 与整个原生 SR 后端是 **SAOG0721 fork 的 Experimental 增量**。
+
+桥必须存在的原因由三层叠加：
+
+1. **宿主是纯 D3D11**（Blinue 的架构遗产，SAOG0721 全盘继承）；
+2. **FSR4 只发 D3D12 提供者**：Magpie 加载的就是 `amd_fidelityfx_upscaler_dx12.dll` +
+   `amd_fidelityfx_loader_dx12.dll`（`FSR3Upscaler.cpp:389/400`），ffx-api 3.x 已无 DX11 变体；
+3. 微软认证的 D3D11↔D3D12 互操作就一种：**共享 NT 纹理 + 共享 fence**——`FSR3Upscaler` 实现的
+   正是这套，没有多余设计。
+
+由此可得一个重要更正：**"把 D3D11→D3D12 桥改成直接 D3D12→Vulkan"这个问法本身不成立**——
+NR 那条腿本来就是 D3D12→Vulkan；D3D11↔D3D12 桥属于 **FSR4 放大器**，即使把 NR 彻底关掉，
+`FSR4_SR` 自己每帧照样跑两次 4K 拷贝 + `Flush` + 双向围栏。桥是放大器的，不是 NR 的。
+
+真正可拆的是三件事，可行性各不相同：
+
+| 方案 | 内容 | 可行性 |
+|---|---|---|
+| a. 链纹理直接建成共享 | Magpie 在链里含原生效果时，把效果链的输入/输出纹理直接建成 `MISC_SHARED_NTHANDLE`，`FSR3Upscaler` 不再 `CopyResource` 而是直接开链纹理 | **中等**。省掉两次 4K 拷贝（约 0.1–0.2 ms），保留围栏与单槽；改的是纹理创建路径，风险可控 |
+| b. 拆单槽（§8.4 方向 3） | 2–3 槽环形共享纹理 + 槽位围栏，N+1 拷入与 N 帧岛重叠 | **可行但工作量大**，是"帧内串行"的唯一结构性解 |
+| c. NR 绕过 D3D12，D3D11→Vulkan 直连 | Vulkan 侧技术上存在：`VK_KHR_external_memory_win32` 的 `D3D11_TEXTURE` 句柄类型可导入共享纹理，`D3D12_FENCE` 信号量类型可导入共享 fence（D3D11/D3D12 共享 fence 是同一内核对象） | **不推荐**。要改运行时（`Create` 只收 ID3D12Device/queue）；FFX 放大器仍需 D3D12，桥不会消失，只是把 NR 从岛内挪到岛前、同步更绕；收益与 mochinr 本就可能拿到的 `in_place` 重叠 |
+
+结论：**桥拆不掉（FSR4 的账），但可以 (a) 把它的拷贝省掉、(b) 把它的串行拆开**。这两项都在
+GPL fork 里做，不需要动运行时；NR 侧的最优结果仍是 `in_place=1` 时岛内零拷贝。
+
 ## 9. 出处
 
 - Magpie：`SAOG0721/Magpie`，分支 `experimental`，`src/Magpie.Core/FSR3Upscaler.cpp`、
