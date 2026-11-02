@@ -31,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-all.ps1
 | `nr-router.exe` | `src/nr-router/nr_router.cpp` | 纯 Win32，无第三方依赖 |
 | `nrtest.exe` | `src/nrtest/main.cpp` | 需 `src/nrtest/LmxxfNrApi.h` |
 | `nrbench.exe` | `src/nrtest/nrbench.cpp` | 同上；跑 N 帧并拆开计时 |
-| `mochinr.addon64` | `src/mochinr/mochinr.cpp` | v0.4 主力；需 MinHook 与 ReShade 6.8 头文件 |
+| `mochinr.addon64` | `src/mochinr/mochinr.cpp` | v0.4 主力；需 MinHook 与 ReShade 6.8 头文件（`src/mochinr/build.ps1` 自动找 `upstream\`，也可 `-MinHookDir` / `-ReshadeIncludeDir` 指定；`-OutFile` 可直接输出到部署目录） |
 | `amd-nr.addon64` | 上游 OpenNR 源码 + `src/opennr-patches/` | 由 `build-all.ps1` 调上游自带的 `build.ps1 -Target neural`（v0.4 起不随发布包分发） |
 
 所有目标都用 **`/MT` 静态 CRT**：游戏目录里常躺着旧版 `msvcp140.dll`，`/MD` 会让私有副本覆盖
@@ -66,7 +66,8 @@ dumpbin /exports dist\overlay-input.addon64   # 期望只有 NAME / DESCRIPTION�
 dumpbin /dependents dist\overlay-input.addon64 # 期望只有系统 DLL，无 msvcp140/vcruntime
 ```
 
-`mochinr.addon64` / `amd-nr.addon64` 同理：导出 `NAME`、`DESCRIPTION`，依赖只有
+`mochinr.addon64` 不导出 `NAME`/`DESCRIPTION`：它用 ReShade 的自注册（`reshade::register_addon`，
+启动时无导出表），依赖只有
 `USER32/bcrypt/SHELL32/ole32/KERNEL32` 这类系统 DLL。
 
 `src/hooks/*.hlsl`（`AMDNR-ACO` / `AMDNR-HIP`）不是本仓库编译的，它们是 Magpie 的效果器源码，

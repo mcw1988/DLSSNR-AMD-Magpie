@@ -36,7 +36,7 @@
 
 #include <MinHook.h>
 
-#include "../../nrtest/LmxxfNrApi.h"
+#include "../nrtest/LmxxfNrApi.h"
 #include "MochizukiNrControls.h"   // the runtime's own exports beside LmxxfNrGetApi
 
 using namespace reshade::api;
@@ -222,6 +222,10 @@ struct Stats
     double total = 0, detour = 0;
     unsigned detours = 0, splits = 0, batches = 0;
     unsigned frames = 0, waits = 0;
+    // Did the runtime hand back the frame itself (sampled in place, no copy) or its private
+    // texture (copy in, and the upscaler reads that copy)? The log line says which, so the
+    // bridge's cost can be attributed without guessing.
+    unsigned inPlace = 0, copied = 0;
     double waitMs = 0;
 };
 
@@ -676,6 +680,28 @@ bool RunJob(Job &j)
                         (unsigned long long)cd.Width, cd.Height, (unsigned long long)pd.Width, pd.Height);
                     Log("buffers: colour=%p private=%p same=%d debug_view=%d", (void *)color, (void *)privateOutput,
                         color == privateOutput ? 1 : 0, g_cfg.debugView);
+                    // A zero-copy frame needs two things: the resource must be exportable to Vulkan
+                    // (CreateSharedHandle succeeds) and the runtime must accept its format. The
+                    // runtime tries the frame in place first ("sampling the caller's ... in place")
+                    // and falls back to a copy; this probe says whether the first part is even
+                    // possible for the texture Magpie's FFX backend hands us. It is a read-only
+                    // check: the handle is closed immediately and the resource is not touched.
+                    D3D12_HEAP_PROPERTIES chp{};
+                    D3D12_HEAP_FLAGS chf{};
+                    ID3D12Device *shareDev = j.recordDevice != nullptr ? j.recordDevice : g_sub.device;
+                    if (shareDev != nullptr && SUCCEEDED(color->GetHeapProperties(&chp, &chf))) {
+                        HANDLE shared = nullptr;
+                        const HRESULT sh = shareDev->CreateSharedHandle(color, nullptr, GENERIC_ALL, nullptr, &shared);
+                        if (shared != nullptr) CloseHandle(shared);
+                        Log("bridge: colour heap flags=0x%X type=%d shareable=%d (0x%08lX) frame_bytes=%llu",
+                            (unsigned)chf, (int)chp.Type, SUCCEEDED(sh) ? 1 : 0, (unsigned)sh,
+                            (unsigned long long)cd.Width * cd.Height * 4ull);
+                    }
+                    D3D12_HEAP_PROPERTIES php{};
+                    D3D12_HEAP_FLAGS phf{};
+                    if (SUCCEEDED(privateOutput->GetHeapProperties(&php, &phf)))
+                        Log("bridge: private heap flags=0x%X type=%d in_place=%d", (unsigned)phf, (int)php.Type,
+                            privateOutput == color ? 1 : 0);
                 }
                 if (!sizeOk && !g_nr.loggedDims) {
                     g_nr.loggedDims = true;
@@ -797,9 +823,10 @@ bool RunJob(Job &j)
     g_stats.total += NowMs() - tFrameStart;
     if (g_stats.frames % 300 == 0) {
         const double n = double(g_stats.frames);
-        Log("perf: frames=%u cpu/frame=%.3f ms (prepare %.3f, recIn %.3f, hip %.3f, submit %.3f) waits=%u %.2f ms",
+        Log("perf: frames=%u cpu/frame=%.3f ms (prepare %.3f, recIn %.3f, hip %.3f, submit %.3f) waits=%u %.2f ms "
+            "inplace=%u copied=%u",
             g_stats.frames, g_stats.total / n, g_stats.prepare / n, g_stats.recordIn / n, g_stats.enqueue / n,
-            g_stats.submit / n, g_stats.waits, g_stats.waitMs);
+            g_stats.submit / n, g_stats.waits, g_stats.waitMs, g_stats.inPlace, g_stats.copied);
         Log("detour: calls=%u splits=%u batches=%u avg=%.3f ms/frame",
             g_stats.detours, g_stats.splits, g_stats.batches,
             g_stats.detours ? g_stats.detour / double(g_stats.detours) : 0.0);
@@ -808,6 +835,7 @@ bool RunJob(Job &j)
 
     if (ran) {
         ++g_nr.ran;
+        if (privateOutput == color) ++g_stats.inPlace; else ++g_stats.copied;
         if (g_nr.ran == 1) Log("first composing frame f=%llu %ux%u", (unsigned long long)g_nr.frame, j.width, j.height);
         if (g_nr.ran <= 5 || g_nr.ran % 300 == 0)
             Log("nr: ran f=%llu ok=%llu skip=%llu %ux%u", (unsigned long long)g_nr.frame,

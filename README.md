@@ -105,8 +105,10 @@ lmxxf      5.2–5.3 (网络, HIP)   + ≈0.3–0.4 (进程内互操作)      = 
 mochizuki  3.4     (网络, ACO)   + ≈1.9 (D3D11→D3D12→Vulkan)    = 5.3 -> 84 fps
 ```
 
-所以**“网络快 2.22 ms”不能当成实机领先**，端到端只有 0.3 ms。桥接那 1.9 ms 是目前
-唯一还没动过的大块，详见 [docs/2026-10-31-session.md](docs/2026-10-31-session.md) 第 9 节。
+所以**“网络快 2.22 ms”不能当成实机领先**，端到端只有 0.3 ms。
+
+> **2026-11-02 更正**：那 1.9 ms 是 **v0.3 present 层**的残差估算，换到 v0.4 的 FFX 钩子后已不成立
+> （v0.4 每帧 CPU 合计 0.17 ms）。三段拆解与待测量见 **[docs/bridge.md](docs/bridge.md)**。
 
 > 补帧同时开启时，NR 的成本会按倍率翻倍（2x 下每个内容帧跑 2 次，有逐帧计数为证），
 > 这是选 2x / 3x 时必须算进去的一项。v0.4 把 NR 挪到放大之前后，这一条不再成立（未实测）。
@@ -197,7 +199,7 @@ src/overlay-input/  ReShade add-on：把键鼠喂进 Magpie 的渲染窗口
 src/nrtest/         运行时冒烟测试（nrtest）与帧成本基准（nrbench）
 src/opennr-patches/ 对 OpenNR 0.7.15 的补丁（含 D3D11↔D3D12 共享围栏）
 scripts/            一键构建、上游获取、打发布包
-docs/               架构、构建、使用、排错、上游清单、实测数据、结论
+docs/               架构、构建、使用、排错、上游清单、实测数据、结论、桥接拆解（bridge.md）
 dist/               预编译产物（由本仓库源码构建，见 dist/README.md）
 ```
 

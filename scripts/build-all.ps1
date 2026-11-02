@@ -86,6 +86,16 @@ if ($reshadeInclude) {
     Write-Host 'OK overlay-input.addon64'
 }
 
+# --- mochinr ----------------------------------------------------------------
+$mochinrBuild = Join-Path $repo 'src\mochinr\build.ps1'
+if (Test-Path $mochinrBuild) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $mochinrBuild
+    if ($LASTEXITCODE -ne 0) { throw "mochinr 构建失败 ($LASTEXITCODE)" }
+    Write-Host 'OK mochinr.addon64'
+} else {
+    Write-Host '跳过 mochinr：src\mochinr\build.ps1 不存在' -ForegroundColor Yellow
+}
+
 # --- 上游宿主（可选） -------------------------------------------------------
 $upstream = Join-Path $repo 'upstream\dlss5-neural-amd'
 if (-not $SkipUpstream -and (Test-Path (Join-Path $upstream 'build.ps1'))) {

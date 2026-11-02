@@ -17,24 +17,38 @@
 
 ## 当前瓶颈
 
-1. **D3D11 → D3D12 → Vulkan 桥接 ≈ 1.9 ms**（v0.3 4K 实测）。这是唯一还没动过的大块：
-   网络本身 3.4 ms，对照 lmxxf 网络 5.2–5.3 ms 却只慢 0.3 ms 端到端。
-2. **帧内串行**：降低网络渲染率只降 GPU 负载与功率，**帧数不升**（游戏限帧已排除），
-   嫌疑是 D3D12 ↔ Vulkan 围栏把每帧串起来了。
-3. **分辨率**：只测过 1080p 输入；1440p / 4K 输入的桥接与光流成本都还没调。
+> 2026-11-02 更正：旧的"桥接 ≈ 1.9 ms"是 **v0.3 present 层**的残差估算，换到 v0.4 的 FFX 钩子后
+> 已不成立（v0.4 每帧 CPU 合计 0.17 ms）。三段拆开与证据见 [bridge.md](bridge.md)。
+
+1. **宿主侧的两次 4K 拷贝 + 每帧 `Flush`（结构性，改不掉）**。v0.4 起 NR 站在 Magpie 的
+   `FSR3Upscaler` 里，D3D11→D3D12 由宿主用共享纹理完成：`CopyResource(sharedInput11)` →
+   `Flush` → 共享围栏 → FFX → 围栏回来 → `CopyResource(output, sharedOutput11)`
+   （`FSR3Upscaler.cpp:498/506/579`）。**这与 NR 无关，lmxxf 付同样的账**，是效果组的帧率下限。
+   还没量过"禁用 mochinr、只留 `FSR4_SR`"的基线，所以不知道下限在哪。
+2. **D3D12 → Vulkan 的每帧一次拷贝或时间线等待**。运行时优先"原地读写调用者的纹理"，失败才拷
+   （二进制字符串：`frame read and written in place` / `copying instead`）。能不能原地，取决于
+   Magpie 从 D3D11 共享纹理开出来的资源能否再导出句柄 —— v0.4 的 addon 已加只读探针
+   （`bridge:` / `inplace=` / `copied=` 三行日志），在 9070 XT 上一跑就知道。
+3. **帧内串行**：降低网络渲染率只降 GPU 负载与功率，**帧数不升**（游戏限帧已排除）。
+   现在的嫌疑分两个，都能用日志分开：`inflight=2` 的宿主侧限流（`perf:` 行的 `waits=`），
+   还是运行时把 D3D12 与 Vulkan 串在一帧里（`inplace=` / `copied=` 与帧时间的关系）。
+4. **分辨率**：只测过 1080p 输入；1440p / 4K 输入的拷贝尺寸与光流成本都还没调。
 
 ## 下一步（按性价比）
 
-1. 复测 v0.4 的网络耗时与 `nrbench` 分解，把「对齐目标 2」变成一条可复查的数据；
-2. 把桥接的 1.9 ms 拆开：共享句柄拷贝 vs 队列等待 vs 状态转换，找出能并行的部分；
-3. 验证补帧：v0.4 的 NR 在放大之前，FG 是否真的不再重复跑 NR（用逐帧计数对照）；
-4. RDNA3（RX 7000）路线：`shaders-rdna3` 变体 + 无 ACO 的降级路径；
-5. 面板：版式重排、术语统一、无效项隐藏（mochizuki 下 Compose/Guard 一类本就不生效）。
+1. 在 9070 XT 上读新增的 `bridge:` / `inplace=` / `copied=` / `waits=` 四个读数，把第 2、3 条从
+   "嫌疑"变成"数据"（步骤见 [bridge.md](bridge.md) §6）；
+2. 量"禁用 mochinr、只留 `FSR4_SR`"的基线帧率，确定第 1 条的结构性下限；
+3. 复测 v0.4 的网络耗时与 `nrbench` 分解，把「对齐目标 2」变成一条可复查的数据；
+4. 验证补帧：v0.4 的 NR 在放大之前，FG 是否真的不再重复跑 NR（用逐帧计数对照）；
+5. RDNA3（RX 7000）路线：`shaders-rdna3` 变体 + 无 ACO 的降级路径；
+6. 面板：版式重排、术语统一、无效项隐藏（mochizuki 下 Compose/Guard 一类本就不生效）。
 
 ## 已知的「不算数」的结论
 
 写在这里防止被自己的旧文档误导，细节见 [findings.md](findings.md)：
 
 - v0.3 的「present 阶段成本随补帧倍率翻倍」在 v0.4 不再成立（NR 已挪到放大之前），但**新数字未测**；
+- 「桥接 1.9 ms」是 v0.3 present 层的残差，**不属于 v0.4**（见 [bridge.md](bridge.md) §2）；
 - 「网络快 2.22 ms」不等于实机领先（端到端只差 0.3 ms）；
 - v0.3 的双 addon 共存方案（OpenNR 自动让位）在 v0.4 被 `nr-router` 的文件层互斥取代。

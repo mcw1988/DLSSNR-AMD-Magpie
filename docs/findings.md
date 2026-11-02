@@ -125,3 +125,32 @@ mochizuki  ：15.63 ms = 游戏 + 3.27 (网络) + 光流 + 4K 拷贝 + 桥接等
 - 后续四个方向（session 文档 10.3）：① lmxxf 挂真 XeSS_SR 试 SR-NR/NR-SR 双管线；
   ② mochizuki 提 NR 渲染率 vs lmxxf+XeSS_SR 放大到 4K 的帧数曲线/画质对比；
   ③ 验证 XeSS_SR 是否真实有效；④ FG 适配（前三项完成后）。
+
+---
+
+## 2026-11-02 桥接分层（读上游源码得出，均无实机）
+
+**已确认**
+
+| # | 结论 | 证据 |
+|---|---|---|
+| B1 | v0.4 的 D3D11→D3D12 不是我们的账：`FSR4_SR` 由 Magpie 的 `FSR3Upscaler` 实现，每帧两次 4K 拷贝 + 一次 `Flush` + 共享围栏，lmxxf 跑同一格同样要付 | `FSR3Upscaler.cpp:498/506-509/575-579`，`NativeEffectBackendFactory.cpp:183` |
+| B2 | v0.4 出方向不拷贝：消费端把放大器的 `color` 直接指向运行时的 `private_output` | `mochinr.cpp:747-758` |
+| B3 | 运行时**优先原地读写**调用者的纹理，失败才拷贝；两条路径都有日志字符串 | `MochizukiNrRuntime.dll`：`frame read and written in place` / `copying instead` / `input check: the copy never landed` |
+| B4 | lmxxf 只解决 D3D12→HIP 一段：共享缓冲 + 共享围栏导入 HIP、只认宿主队列、按网络档拷贝、`direct_input` 时零拷贝；它自量桥接 0.1–0.3 ms（网络 24 ms 下） | `hip_d3d12_bridge.h:162/211/233/292/294`，`staging-bridge.md`，`bridge-isolation.md` |
+
+**已撤回**
+
+| 曾经的判断 | 为什么撤回 |
+|---|---|
+| 「D3D11 → D3D12 → Vulkan 桥接 ≈ 1.9 ms」适用于 v0.4 | 那是 v0.3 present 层的预算残差（含 staging、OpenNR 私有队列等待与 CPU 跨设备等待）。v0.4 每帧 CPU 合计 0.17 ms（发布说明实测），几何形状已变 |
+| 「换 FFX 钩子就绕过了 D3D11↔D3D12」 | 没有绕过，只是**换了执行者**：从 OpenNR 的桥，换成 Magpie 自己的共享纹理路径，成本仍每帧发生 |
+
+**待测（9070 XT）**
+
+1. `bridge: colour ... shareable=?` —— Magpie 从 D3D11 共享纹理开出来的 D3D12 资源能否再导出句柄；
+2. `inplace=` / `copied=` —— 运行时实际走零拷贝还是拷贝；
+3. `waits=` / `wait ms` —— `inflight=2` 的宿主限流是否在限帧；
+4. 「禁用 mochinr、只留 `FSR4_SR`」的基线帧率 —— 宿主侧结构性下限。
+
+完整推导与测量步骤见 [bridge.md](bridge.md)。

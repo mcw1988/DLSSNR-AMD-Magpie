@@ -81,14 +81,20 @@ present 事件 → 记下 swapchain->get_hwnd()（ReShade 就是在这个窗口�
 
 | 环节 | 谁实现 | 证据 |
 |---|---|---|
+| D3D11 → D3D12（v0.4） | **Magpie 的 `FSR3Upscaler`**，不是本项目 | `CopyResource(sharedInput11, input)`、`Signal(fence11)`/`Flush`、`queue12->Wait`、`OpenSharedHandle`（`FSR3Upscaler.cpp:186-215/498-509/575-579`） |
 | D3D12 共享句柄 → Vulkan 内存/图像 | `MochizukiNrRuntime.dll` | 它导入 `vkGetMemoryWin32HandlePropertiesKHR`、`vkImportSemaphoreWin32HandleKHR`，创建时间线信号量 |
 | Vulkan 提交与完成通知（`EnqueueHip` 的往返） | 同上 | 面板「计时」页的 **Vulkan 围栏** 一栏（实机 ≈0.09 ms）就是等这一次往返 |
 | 提交节奏 + `Retire` 延迟 | **本仓库**（`src/mochinr/mochinr.cpp`） | 在宿主队列的设备上 `CreateFence`，`Signal` / `WaitSlot` / `GetCompletedValue`，保证 GPU 读完才释放运行时资源 |
-| D3D11 ↔ D3D12 共享围栏（宿主桥） | **本仓库**（`src/opennr-patches/`） | 补丁里的 `crossFence` / `ringFence` / `backFence`：Magpie 是 D3D11，桥接队列是 D3D12 |
+| D3D11 ↔ D3D12 共享围栏（v0.3，present 层） | **本仓库**（`src/opennr-patches/`） | 补丁里的 `crossFence` / `ringFence` / `backFence`：Magpie 是 D3D11，桥接队列是 D3D12 |
 
 也就是说：*“自建 Vulkan-D3D12 围栏”这个说法不准确*。本项目自建的是 **D3D12 侧的一条节奏围栏**
 与 **D3D11↔D3D12 的共享 cross fence**；Vulkan 那一半（D3D12 句柄导入 + 时间线信号量）在运行时里，
 我们只是**等**它，并把等待时间计进 `enqueue`。
+
+v0.4 换了挂载点之后，这条链的归属再变一次：**D3D11→D3D12 完全交给 Magpie**（`FSR4_SR` 这个效果器
+自己的实现），因此 v0.3 补丁里的 `crossFence` 那一套在 v0.4 **不再参与**；本项目只剩"把颜色交给
+运行时、把放大器的 color 指向运行时的输出"两件事。三段拆解、每段的拷贝次数与待测量见
+[bridge.md](bridge.md)。
 
 ## 6. `nr-router` 的判定（v0.4）
 
