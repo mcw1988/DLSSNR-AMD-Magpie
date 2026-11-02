@@ -119,6 +119,9 @@ struct Settings
     // Lanczos / FSR1 are sharp resamplers -- pick bilinear or matched residual to stay soft.
     int enlargeMode = 0;    // 0 matched residual, 1 edge-aware, 2 classic
     int classicScaler = 1;  // 0 bilinear, 1 Catmull-Rom, 2 Lanczos3, 3 FSR1
+    // The upscaler's own RCAS sharpening, which Magpie hardcodes to 0.2 (FSR3Upscaler.cpp). The
+    // value lives in the replayed descriptor, so we can turn it down here instead of forking the host.
+    float fsr4Sharpen = 0.2f;  // 0..1, 0 = no sharpening
 };
 
 Settings g_cfg;
@@ -169,6 +172,7 @@ void LoadSettings(const std::wstring &dir)
         else if (_stricmp(key, "preprocess_saturation") == 0) g_cfg.preprocessSaturation = (float)atof(val);
         else if (_stricmp(key, "enlarge_mode") == 0) g_cfg.enlargeMode = atoi(val);
         else if (_stricmp(key, "classic_scaler") == 0) g_cfg.classicScaler = atoi(val);
+        else if (_stricmp(key, "fsr4_sharpen") == 0) g_cfg.fsr4Sharpen = (float)atof(val);
     }
     fclose(f);
 }
@@ -840,6 +844,10 @@ bool RunJob(Job &j)
         // driver after the network rebuilt for a new resolution.
         DispatchDesc d = j.desc;
         d.commandList = c;
+        // Magpie forces RCAS on at 0.2; honour the panel instead. A zero strength with sharpen on
+        // is a no-op for the provider, so only the value matters.
+        d.sharpen = g_cfg.fsr4Sharpen > 0.0f;
+        d.sharpness = g_cfg.fsr4Sharpen < 0.0f ? j.desc.sharpness : g_cfg.fsr4Sharpen;
         if (ran && privateOutput != nullptr) {
             d.res[kColor].resource = privateOutput;
             d.res[kColor].width = j.width;
@@ -1196,10 +1204,10 @@ void SaveSettings()
             g_cfg.pass3Colour);
     fprintf(f, "anti_halo=%d\nanti_halo_margin=%.3f\npreprocess=%d\npreprocess_exposure=%d\n"
                "preprocess_bias_ev=%.3f\npreprocess_curve=%d\npreprocess_contrast=%.3f\n"
-               "preprocess_saturation=%.3f\nenlarge_mode=%d\nclassic_scaler=%d\n",
+               "preprocess_saturation=%.3f\nenlarge_mode=%d\nclassic_scaler=%d\nfsr4_sharpen=%.3f\n",
             g_cfg.antiHalo ? 1 : 0, g_cfg.antiHaloMargin, g_cfg.preprocess ? 1 : 0, g_cfg.preprocessExposure,
             g_cfg.preprocessBias, g_cfg.preprocessCurve, g_cfg.preprocessContrast, g_cfg.preprocessSaturation,
-            g_cfg.enlargeMode, g_cfg.classicScaler);
+            g_cfg.enlargeMode, g_cfg.classicScaler, g_cfg.fsr4Sharpen);
     fclose(f);
     Log("settings saved to mochinr.ini");
 }
@@ -1280,6 +1288,9 @@ void OnOverlay(effect_runtime *)
             ImGui::SetNextItemWidth(240.0f);
             ImGui::SliderFloat("色度钳制", &g_cfg.chromaClamp, 0.0f, 4.0f,
                                g_cfg.chromaClamp <= 0.0f ? "关闭" : "%.2f 档");
+            ImGui::SetNextItemWidth(240.0f);
+            ImGui::SliderFloat("FSR4 锐化", &g_cfg.fsr4Sharpen, 0.0f, 1.0f,
+                               g_cfg.fsr4Sharpen <= 0.0f ? "关闭（原值 0.20）" : "%.2f");
             ImGui::Spacing();
             Toggle("细节稳定", g_cfg.detailStability);
             ImGui::SameLine();
