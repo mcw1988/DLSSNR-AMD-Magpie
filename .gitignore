@@ -3,6 +3,7 @@
 *.pdb
 *.ilk
 *.exp
+*.map
 *.lib
 build/
 x64/

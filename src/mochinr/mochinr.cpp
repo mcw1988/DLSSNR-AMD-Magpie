@@ -1168,14 +1168,34 @@ void EnsureHooks(ID3D12CommandQueue *queue)
     StartSessionOnce();
 }
 
+// ReShade hands out device-agnostic wrappers. In a chain with no native (D3D12) effect the queue
+// wraps a D3D11 object, and taking it for an ID3D12CommandQueue walks a foreign vtable -- the
+// GetDesc() call at the top of EnsureHooks then reads whatever the callee left in RAX. That was a
+// reliable 0xc0000005 at scaling start for every non-FSR4 chain. Check the API before casting.
+static ID3D12CommandQueue *AsD3D12Queue(command_queue *queue)
+{
+    if (queue == nullptr) return nullptr;
+    device *dev = queue->get_device();
+    if (dev == nullptr || dev->get_api() != device_api::d3d12) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            Log("queue api=%d is not D3D12; the FFX slot hooks stay idle in this chain",
+                dev != nullptr ? (int)dev->get_api() : -1);
+        }
+        return nullptr;
+    }
+    return reinterpret_cast<ID3D12CommandQueue *>(queue->get_native());   // get_native() is a uint64_t handle
+}
+
 void OnPresent(command_queue *queue, swapchain *, const rect *, const rect *, uint32_t, const rect *)
 {
-    EnsureHooks(queue != nullptr ? reinterpret_cast<ID3D12CommandQueue *>(queue->get_native()) : nullptr);
+    EnsureHooks(AsD3D12Queue(queue));
 }
 
 void OnExecute(command_queue *queue, command_list *)
 {
-    EnsureHooks(queue != nullptr ? reinterpret_cast<ID3D12CommandQueue *>(queue->get_native()) : nullptr);
+    EnsureHooks(AsD3D12Queue(queue));
     ReleaseDeferred();
 }
 

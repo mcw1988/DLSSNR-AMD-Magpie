@@ -17,7 +17,8 @@
 param(
     [string]$MinHookDir,
     [string]$ReshadeIncludeDir,
-    [string]$OutFile
+    [string]$OutFile,
+    [switch]$Map     # 出 .map：崩溃偏移对函数用（WER 的 fault offset 直接查表）
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,7 +91,7 @@ try {
         mochinr.cpp `
         (Join-Path $MinHookDir 'src\hook.c') (Join-Path $MinHookDir 'src\trampoline.c') `
         (Join-Path $MinHookDir 'src\buffer.c') (Join-Path $MinHookDir 'src\hde\hde64.c') `
-        /link /DLL /OUT:"$OutFile" d3d12.lib dxgi.lib user32.lib
+        /link $(if ($Map) { '/MAP' }) /DLL /OUT:"$OutFile" d3d12.lib dxgi.lib user32.lib
     if ($LASTEXITCODE -ne 0) { throw "compile failed ($LASTEXITCODE)" }
 } finally { Pop-Location }
 
