@@ -1241,6 +1241,16 @@ bool Toggle(const char *label, int &value)
     return true;
 }
 
+// Sliders used to sit at a fixed 240 px -- a bit over half the panel. ImGui draws a widget's label
+// to the right of its frame, so size the frame to the panel's content width minus that label: the
+// whole row (bar + title) then fills the window without spilling past it.
+static void FullRow(const char *label)
+{
+    const float avail = ImGui::GetContentRegionAvail().x;
+    const float w = avail - ImGui::CalcTextSize(label).x - ImGui::GetStyle().ItemInnerSpacing.x;
+    ImGui::SetNextItemWidth(w > 60.0f ? w : 60.0f);
+}
+
 void OnOverlay(effect_runtime *)
 {
     const char *state = g_nr.state == 2 ? "就绪" : g_nr.state == 1 ? "构建中" : g_nr.state == 3 ? "失败" : "空闲";
@@ -1271,16 +1281,16 @@ void OnOverlay(effect_runtime *)
             ImGui::TextDisabled("(p95 %.2f, 层数上限 %u, RenoDX %s)", ri.gpu_ms_p95, ri.max_passes,
                                 ri.renodx_effective ? "开" : "关");
             ImGui::Separator();
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("网络层数");
             ImGui::SliderInt("网络层数", &g_cfg.passes, 1, 3);
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("网络渲染率");
             ImGui::SliderFloat("网络渲染率", &g_cfg.modelScale, 0.25f, 1.0f, "%.2f");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("细节强度");
             ImGui::SliderFloat("细节强度", &g_cfg.transfer, 0.0f, 2.0f, "%.2f");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("色彩强度");
             ImGui::SliderFloat("色彩强度", &g_cfg.colour, 0.0f, 4.0f, "%.2f");
             ImGui::Spacing();
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("每 N 帧重置时域历史（0 = 不重置）");
             ImGui::SliderInt("每 N 帧重置时域历史（0 = 不重置）", &g_cfg.resetEvery, 0, 240);
             if (ImGui::Button("立即重置历史")) {
                 if (g_nr.session != nullptr && g_nr.api.ResetHistory != nullptr) g_nr.api.ResetHistory(g_nr.session);
@@ -1290,25 +1300,25 @@ void OnOverlay(effect_runtime *)
         }
         if (ImGui::BeginTabItem("风味")) {
             ImGui::Spacing();
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("风格");
             ImGui::Combo("风格", &g_cfg.style, "标准\0自然\0电影感\0");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("强度");
             ImGui::SliderFloat("强度", &g_cfg.intensity, 0.0f, 2.0f, "%.2f");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("局部色调");
             ImGui::SliderFloat("局部色调", &g_cfg.localTone, 0.0f, 2.0f, "%.2f");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("局部结构");
             ImGui::SliderFloat("局部结构", &g_cfg.localStructure, 0.0f, 2.0f, "%.2f");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("皮肤结构");
             ImGui::SliderFloat("皮肤结构", &g_cfg.skinStructure, -1.0f, 2.0f,
                                g_cfg.skinStructure < 0.0f ? "跟随局部结构" : "%.2f");
             Toggle("自动皮肤遮罩", g_cfg.autoMask);
             ImGui::Spacing();
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("高光保护");
             ImGui::SliderFloat("高光保护", &g_cfg.highlightGuard, 1.0f, 8.0f, "%.1f 倍");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("色度钳制");
             ImGui::SliderFloat("色度钳制", &g_cfg.chromaClamp, 0.0f, 4.0f,
                                g_cfg.chromaClamp <= 0.0f ? "关闭" : "%.2f 档");
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("FSR4 锐化");
             ImGui::SliderFloat("FSR4 锐化", &g_cfg.fsr4Sharpen, 0.0f, 1.0f,
                                g_cfg.fsr4Sharpen <= 0.0f ? "关闭（原值 0.20）" : "%.2f");
             ImGui::Spacing();
@@ -1321,16 +1331,16 @@ void OnOverlay(effect_runtime *)
             if (ImGui::TreeNode("多层的后续参数")) {
                 Toggle("第 2 层跟随第 1 层", g_cfg.pass2Follow);
                 ImGui::BeginDisabled(g_cfg.pass2Follow != 0);
-                ImGui::SetNextItemWidth(200.0f);
+                FullRow("第 2 层细节");
                 ImGui::SliderFloat("第 2 层细节", &g_cfg.pass2Transfer, 0.0f, 2.0f, "%.2f");
-                ImGui::SetNextItemWidth(200.0f);
+                FullRow("第 2 层色彩");
                 ImGui::SliderFloat("第 2 层色彩", &g_cfg.pass2Colour, 0.0f, 1.0f, "%.2f");
                 ImGui::EndDisabled();
                 Toggle("第 3 层跟随第 1 层", g_cfg.pass3Follow);
                 ImGui::BeginDisabled(g_cfg.pass3Follow != 0);
-                ImGui::SetNextItemWidth(200.0f);
+                FullRow("第 3 层细节");
                 ImGui::SliderFloat("第 3 层细节", &g_cfg.pass3Transfer, 0.0f, 2.0f, "%.2f");
-                ImGui::SetNextItemWidth(200.0f);
+                FullRow("第 3 层色彩");
                 ImGui::SliderFloat("第 3 层色彩", &g_cfg.pass3Colour, 0.0f, 1.0f, "%.2f");
                 ImGui::EndDisabled();
                 ImGui::TreePop();
@@ -1341,7 +1351,7 @@ void OnOverlay(effect_runtime *)
                                    "边缘亮边；需要「网络层数」≥ 2。");
                 Toggle("抗光晕", g_cfg.antiHalo);
                 ImGui::BeginDisabled(g_cfg.antiHalo == 0);
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("抗光晕幅度");
                 ImGui::SliderFloat("抗光晕幅度", &g_cfg.antiHaloMargin, 0.0f, 0.5f,
                                    g_cfg.antiHaloMargin <= 0.0f ? "关" : "%.3f");
                 ImGui::EndDisabled();
@@ -1350,15 +1360,15 @@ void OnOverlay(effect_runtime *)
                                    "改变的是网络「怎么改图」；开启后会重建一次网络。");
                 Toggle("启用预处理", g_cfg.preprocess);
                 ImGui::BeginDisabled(g_cfg.preprocess == 0);
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("曝光");
                 ImGui::Combo("曝光", &g_cfg.preprocessExposure, "关闭\0自动\0固定（仅偏置）\0");
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("曝光偏置 EV");
                 ImGui::SliderFloat("曝光偏置 EV", &g_cfg.preprocessBias, -8.0f, 8.0f, "%.2f");
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("曲线");
                 ImGui::Combo("曲线", &g_cfg.preprocessCurve, "无\0中性\0Reinhard\0Filmic\0GT\0ACES\0AGX\0");
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("对比度");
                 ImGui::SliderFloat("对比度", &g_cfg.preprocessContrast, 0.5f, 2.0f, "%.2f");
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("饱和度");
                 ImGui::SliderFloat("饱和度", &g_cfg.preprocessSaturation, 0.05f, 1.0f, "%.2f");
                 ImGui::EndDisabled();
                 ImGui::TreePop();
@@ -1366,9 +1376,9 @@ void OnOverlay(effect_runtime *)
             if (ImGui::TreeNode("放大方式（渲染率 < 1 时）")) {
                 ImGui::TextWrapped("渲染率低于 1 时，网络结果回到整帧的走法。经典 Catmull-Rom /\n"
                                    "Lanczos3 / FSR1 都是锐放大器，要更软就选「匹配残差」或双线性。");
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("放大方式");
                 ImGui::Combo("放大方式", &g_cfg.enlargeMode, "匹配残差\0边缘感知\0经典\0");
-                ImGui::SetNextItemWidth(240.0f);
+                FullRow("经典放大器");
                 ImGui::BeginDisabled(g_cfg.enlargeMode != 2);
                 ImGui::Combo("经典放大器", &g_cfg.classicScaler, "双线性\0Catmull-Rom\0Lanczos3\0FSR1\0");
                 ImGui::EndDisabled();
@@ -1395,14 +1405,14 @@ void OnOverlay(effect_runtime *)
             ImGui::Text("  录制           %.3f ms", n ? g_stats.recordIn / n : 0.0);
             ImGui::Text("  准备           %.3f ms", n ? g_stats.prepare / n : 0.0);
             ImGui::Separator();
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("在飞帧数");
             ImGui::SliderInt("在飞帧数", &g_cfg.inflight, 2, 16);
             ImGui::Text("当前队列深度    %d", (int)g_retire.size());
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("调试")) {
             ImGui::Spacing();
-            ImGui::SetNextItemWidth(240.0f);
+            FullRow("显示视图");
             ImGui::Combo("显示视图", &g_cfg.debugView, "正常\0代理\0纯网络\0差分 20 倍\0着色\0");
             ImGui::TextWrapped("「纯网络」显示网络自己的图像：若画面变成一层偏软的网络渲染，说明\n"
                                "「网络 → 效果器」这条链路是通的。");

@@ -19,11 +19,46 @@
 
 ---
 
-预打包的实机目录见 **[Releases v0.4](https://github.com/mcw1988/DLSSNR-AMD-Magpie/releases/tag/v0.4)**
-的 `Magpie-NR-045-v0.4-core.zip`——**一份包，解压即用**，自带 mochizuki 权重。
+预打包的实机目录见 **[Releases v0.5](https://github.com/mcw1988/DLSSNR-AMD-Magpie/releases/tag/v0.5)**
+的 `Magpie-NR-045-v0.5-core.zip`——**一份包，解压即用**，自带 mochizuki 权重。
 lmxxf 权重体积太大不在包内，需要时另取
 **[v0.1 的权重分卷](https://github.com/mcw1988/DLSSNR-AMD-Magpie/releases/tag/v0.1)**
 （v0.2 / v0.3 的 Release 都只传了核心包，没有权重分卷）。
+
+## 状态（v0.5，2026-11-02）
+
+**FG 已解决**：NR 跑在放大之前、只处理原生帧，XeSS 帧生成只看降噪后的帧——30 分钟长跑无闪烁，
+50% 渲染率 1 层 NR 稳定 **60/120**（帧数口径统一为「原生/补帧后」）。
+
+**4K 窗口帧数闭环（平衡点法实测）**：网络成本 1:1 进帧时间，
+`frame ≈ 6.7 ms 捕获/呈现 + 1.4 ms FSR4 槽位 + 13.7×scale² ms 网络`（五点残差 ≤ 0.4 ms）：
+
+| 档位（无 FG） | 帧数 | 帧时间 |
+|---|---|---|
+| 渲染率 1.0 | 47 | 21.5 ms（网络 13.7 ms 主导） |
+| 渲染率 0.5 | 90 | 11.3 ms |
+| 渲染率 0.35 | 105 | 9.5 ms |
+| 天花板 B2（关 NR，只留 FSR4_SR） | 123–125 | 8.0 ms |
+| 天花板 B1（无 SR，纯捕获/呈现） | 150 | 6.7 ms 结构下限 |
+
+完整数据与账目随包发布：`DATA-AB-20261102.md`。
+
+**AMOF 光流三组对照完成**：默认开 **AMDOF Performance-50%**（OF 输入 1080p，成本 ≈25%，
+帧数与无光流几乎一致，画质有少许收益）；Quality-100% 档 +0.8~1.3 ms/帧不值。
+结论与账目随包发布：`TEST-AMOF光流.md`。
+
+**UI**：面板全部滑条/下拉改为整行宽度（框+标题贴合面板宽度，不溢出）。
+
+**默认效果组**：`NR-preupscale` = `FSR4\FSR4_SR`（AMOF 性能档）+ `FrameRate_Filter` +
+`XeSSFG`（2 倍补帧）。
+
+**后续优化方向**：
+
+1. **单槽拆解主线**：给 `FSR3Upscaler` 加 2–3 槽共享纹理环形缓冲，让 N+1 拷入与 N 帧岛重叠
+   （[docs/bridge.md](docs/bridge.md) §8.4 方向 3，已裁决 Go）。预期帧时间收益：0.5 档 −3~4.5 ms
+   （输出 120→约 150），1.0 档 −7~8 ms（47→约 70）；上下界由 B1/B2 实测锚定。
+2. **Motion 线**：mochinr 目前不传运动矢量（TEMPORAL 未解锁）；AMOF 已可默认开启，条件触发
+   接近成立——推进「desc 的 kMotion → fi.motion」的成本与画质研究，与 AMOF 做取舍对比。
 
 ## 状态（v0.4，2026-11-01 夜）
 

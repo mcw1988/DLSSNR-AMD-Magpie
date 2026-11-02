@@ -56,3 +56,13 @@
 - 「桥接 1.9 ms」是 v0.3 present 层的残差，**不属于 v0.4**（见 [bridge.md](bridge.md) §2）；
 - 「网络快 2.22 ms」不等于实机领先（端到端只差 0.3 ms）；
 - v0.3 的双 addon 共存方案（OpenNR 自动让位）在 v0.4 被 `nr-router` 的文件层互斥取代。
+
+## 2026-11-02 增补（v0.5 收敛后）
+
+1. **单槽拆解主线（已裁决 Go）**：`FSR3Upscaler` 共享纹理 2–3 槽环形缓冲，N+1 拷入与
+   N 帧岛重叠。预期帧时间收益 0.5 档 −3~4.5 ms（120→约 150）、1.0 档 −7~8 ms（47→约 70），
+   上下界由 B1（150 fps）/ B2（123–125 fps）实测锚定。动手前先做 inflight 2→3/4 零成本排除，
+   C 组 FG 长跑当回归。
+2. **Motion 线（条件触发接近成立）**：mochinr 从未接运动矢量（`fi.motion` 恒空，TEMPORAL 未解锁）；
+   AMOF 已可默认开启（Performance-50% 几乎免费）——推进 kMotion → fi.motion 的成本与画质
+   研究，与 AMOF 做取舍对比，TEMPORAL 接线做 A/B 画质实验后单独裁决。
