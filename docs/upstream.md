@@ -1,19 +1,33 @@
-# 上游获取与组装
+# 上游、获取与致谢
 
-本仓库**不包含** ReShade、Magpie、两条 NR 运行时及其权重。下面是我们实测可用的来源与摆放方式。
+本仓库**不包含** Magpie、ReShade、运行时二进制与权重（Release 包另含 Magpie，见下）。
+下面是我们实测可用的来源、摆放方式，以及必须说清楚的上游归属。
 
-## 1. Magpie 宿主
+## 0. 上游一览
 
-两条路线，任选：
+| 上游 | 提供了什么 | 许可 | 本仓库是否分发其二进制 |
+|---|---|---|---|
+| [SAOG0721/Magpie](https://github.com/SAOG0721/Magpie)（`experimental` 分支，v0.6.11） | 宿主本体：捕获、效果链、D3D11 渲染、不激活的缩放窗口 | **GPL-3.0** | Release zip 内含，仓库不含 |
+| [lmxxf/dlss5-on-amd-9070xt-porting](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) | `mochinr` 的钩子写法 + lmxxf 权重（`DLSS5-AMD\native-game-tiled-assets`） | MIT | 否 |
+| [mochizuki0323/DLSSNR-AMD](https://github.com/mochizuki0323/DLSSNR-AMD) | mochizuki 运行时与 ACO/FP8 权重 | MIT | 否 |
+| [zmodelerlover/OpenNR-ReShade](https://github.com/zmodelerlover/OpenNR-ReShade) | OpenNR 宿主、ReShade add-on 工程结构、RenoDX 风格面板写法 | MIT | 仅 `dist/amd-nr.addon64`（该源码的构建产物 + 本仓库补丁） |
+| [crosire/reshade](https://github.com/crosire/reshade) | 注入层与 add-on API（6.8.0.2155） | BSD-3-Clause | 否 |
+| [clshortfuse/renodx](https://github.com/clshortfuse/renodx) | 参数面板的风格与术语（经 OpenNR 传入本项目） | MIT | 否 |
 
-- **lmxxf 的 Magpie 发行包**（本项目的起点，内含 Magpie + 他改的 `DLSS5-AMD` 资产与 add-on）：
-  <https://github.com/lmxxf/dlss5-on-amd-9070xt-porting> 的 release，包名形如 `Magpie-DLSS5-AMD-0.41`。
-  实测版本：Magpie **0.6.11**（`Magpie-DLSS5-AMD-0.45`，`logs\magpie.log` 会打印）。
-  0.6.11 起设置存在 `config\v4e\config.json`，旧的 `config\config.json` 只在迁移时读取；
+> **GPL 提醒**：发布包（Release 里的 `Magpie-NR-045-v0.4-core.zip`）包含 Magpie Experimental 的
+> 二进制，属 GPL-3.0。按 GPL-3 第 6 条，我们提供对应源码地址（SAOG0721/Magpie 的
+> `experimental` 分支、v0.6.11 对应提交），本仓库自身代码为 MIT 且不与其链接（运行时通过
+> ReShade add-on API 加载），二者是聚合分发关系。
+
+## 1. Magpie 宿主（Experimental 0.6.11）
+
+- 源码：<https://github.com/SAOG0721/Magpie>，默认分支 `experimental`
+  （"Unofficial experimental Magpie fork with colour-only DLSS, FSR2 and NVIDIA RTX Video integrations"）。
+- 实机用的是 **Magpie-DLSS5-AMD-0.45** 这一打包（内含 0.6.11 + XeSS/FFX 相关 DLL + 占位效果），
+  `logs\magpie.log` 会打印版本号。
+- 0.6.11 起设置存在 `config\v4e\config.json`，旧的 `config\config.json` 只在迁移时读取；
   同时还多了自动的 GPU 进程优先级（`GPU process priority verified: REALTIME`）。
-- 上游 Magpie 原版：<https://github.com/Blinue/Magpie/releases>。用原版需要自己补
-  `libxess.dll`、`amd_fidelityfx_upscaler_dx12.dll` 等 SR 相关 DLL，并自建 `effects\XeSS\XeSS_SR.hlsl`
-  等占位效果（内容就是 `INPUT.SampleLevel(sam, pos, 0)` 的 1:1 拷贝）。
+- 上游 Blinue/Magpie（MIT）是另一个项目，本项目**没有**基于它。
 
 ## 2. ReShade
 
@@ -24,9 +38,11 @@
 - 首次启动会生成 `ReShade.ini`。`[OVERLAY] TutorialProgress=4` 可跳过新手引导；
   覆盖层热键在 `[INPUT] KeyOverlay`（默认 36 = Home），必须与 `overlay-input.ini` 的 `Key` 一致。
 
-## 3. mochizuki 运行时（Vulkan）
+## 3. mochizuki 运行时与权重（Vulkan / ACO）
 
-来源：HuggingFace 数据集 <https://huggingface.co/datasets/zmodelerlover/amd-nr>
+作者仓库 <https://github.com/mochizuki0323/DLSSNR-AMD> 在 2026-11-02 访问时返回 **404**
+（改名或转私有）。实际可用来源是 HuggingFace 数据集
+<https://huggingface.co/datasets/zmodelerlover/amd-nr>：
 
 | 需要什么 | 路径 | 大小 |
 |---|---|---|
@@ -55,39 +71,51 @@ dlssnr-amd\
 
 ## 4. lmxxf 运行时
 
-- 权重与引擎都在 `dlss5-amd.addon64` 里，随 Magpie 的 lmxxf 发行包提供：
+- 权重与引擎都在 `dlss5-amd.addon64` 里，随 lmxxf 的 Magpie 发行包提供：
   `DLSS5-AMD\native-game-tiled-assets\`（462 个 `.f32/.f16` + `HIP\gfx1200\*.hsaco`，约 594 MB）。
 - 它需要驱动自带的 **HIP 7**（`amdhip64_7.dll`），RX 7000/9000 的 Adrenalin 都带。
+- 本项目的 `mochinr` 借鉴了它的**钩子写法**（`ffxDispatch` 拦截、提交期劈批、重放），
+  没有复用它的代码。
 
-## 5. OpenNR 宿主（`amd-nr.addon64`）
+## 5. OpenNR 宿主（`amd-nr.addon64`，v0.4 起退役）
 
-两条路：
+- 源码：<https://github.com/zmodelerlover/OpenNR-ReShade>（原 `dlss5-neural-amd`，GitHub 会自动跳转）
+  → `build.ps1 -Target neural`，产物 `build\amd-nr.addon64`。该工程自带 `3rdparty\reshade`、
+  `3rdparty\minhook`、`3rdparty\mochizuki\LmxxfNrApi.h`。
+- 本项目对它的改动在 `src/opennr-patches/opennr-0.7.15-magpie-nr.patch`（含 D3D11↔D3D12 共享围栏）。
+- 也提供预编译版本：HF 数据集同仓库的 `addon/<版本>/amd-nr.addon64`。
 
-- **用 `dist/amd-nr.addon64`**：本仓库已按上游源码构建好（MIT，声明见 THIRD-PARTY-NOTICES）；
-- **自己构建**：<https://github.com/zmodelerlover/dlss5-neural-amd> → `build.ps1 -Target neural`
-  （需要 VS 2022 Build Tools + Windows SDK，产物 `build\amd-nr.addon64`）。
-  该工程自带 `3rdparty\reshade`（头文件）、`3rdparty\minhook`、`3rdparty\mochizuki\LmxxfNrApi.h`。
-
-也提供预编译版本：HF 数据集同仓库的 `addon/<版本>/amd-nr.addon64`。
-
-## 6. 组装检查清单
+## 6. 组装检查清单（v0.4）
 
 ```
-□ Magpie.exe + 它的依赖都在同一目录，能单独启动
+□ Magpie.exe + 依赖同目录，能单独启动；目录是纯 ASCII 路径
 □ dxgi.dll = ReShade 6.8 "with full add-on support"
-□ ReShade.log 里出现 `Registered add-on ... using ReShade API version 20`
-□ DLSS5-AMD\native-game-tiled-assets\ 有 462 个权重文件 + HIP\gfx1200\
+□ ReShade.log 出现 Registered add-on ... using ReShade API version 20
+□ 三个后端只有一个 *.addon64，其余为 *.off（nr-router.exe --dry-run 会告诉你该谁）
 □ MochizukiNrRuntime.dll + dlssnr-amd\{dlssnr-small.bin, shaders\, int4\, aco\, prewarm\}
-□ 两个 add-on 一个叫 *.addon64、另一个叫 *.off（nr-router.exe --dry-run 会告诉你该谁）
+□ config\v4e\config.json 里有 NR-preupscale / NR-lmxxf / 仅补帧 三个组
 □ overlay-input.ini 的 Key 与 ReShade.ini 的 [INPUT] KeyOverlay 一致
-□ tools\nrtest.exe "<目录>" 能跑到 PrepareFrame rc=0
+□ nrtest.exe "<目录>" 能跑到 PrepareFrame rc=0；nrbench.exe 能出每帧分解
 ```
 
 ## 7. 版本与体积参考
 
 | 项 | 值 |
 |---|---|
-| 整包解压后 | 约 1.5 GB（不含 NVIDIA 专用 DLL） |
-| `DLSS5-AMD\native-game-tiled-assets` | 594 MB |
+| 发布包（v0.4 core） | 约 1.5 GB 解压后（不含 lmxxf 权重与 NVIDIA 专用 DLL） |
+| `DLSS5-AMD\native-game-tiled-assets` | 594 MB（不在包内） |
 | `dlssnr-amd` | 286 MB |
 | `libxess.dll` / `libxess_fg.dll` / `amd_fidelityfx_upscaler_dx12.dll` | 78 MB / 23 MB / 29 MB |
+
+## 8. 致谢
+
+没有下面这些人的工作，这个项目不会存在：
+
+- **SAOG0721** — Magpie Experimental，整套捕获与缩放链路的地基；
+- **lmxxf（Kien）** — 第一个把 DLSS 神经渲染搬到 AMD 的人之一，`mochinr` 的钩子写法直接来自其工程；
+- **mochizuki0323（望月）** — mochizuki 运行时：用 Vulkan + FP8 把这套网络做得又快又省；
+- **zmodelerlover** — OpenNR 宿主与 RenoDX 风格面板，本项目 add-on 工程结构与参数组织都受益于此；
+- **crosire** — ReShade，本项目所有 add-on 的宿主与 API；
+- 以及 **danielblnc**、**TheAutomatic** 等把 DLSS-NR 带到 AMD 的先行者。
+
+郑重感谢。

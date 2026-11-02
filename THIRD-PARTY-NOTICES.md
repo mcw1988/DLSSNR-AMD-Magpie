@@ -2,32 +2,53 @@
 
 本仓库自身的代码（`src/`、`scripts/`、`docs/`）为 **MIT**，见 [LICENSE](LICENSE)。
 
-下表列出本项目**使用**的上游组件。除特别标注外，本仓库**不随附**它们的二进制或权重，
-使用者需按 [docs/upstream.md](docs/upstream.md) 自行获取。
+下表中「仓库」指本 git 仓库，「发布包」指 GitHub Releases 里的 `Magpie-NR-045-v0.4-core.zip`。
+两者范围不同：仓库只放本仓库源码与自建产物，发布包才含宿主程序。
 
-| 组件 | 来源 | 许可 | 本仓库是否分发 |
-|---|---|---|---|
-| ReShade 6.8 | <https://github.com/crosire/reshade> | BSD-3-Clause | 否（运行时以 `dxgi.dll` 注入，需“with full add-on support”构建） |
-| ReShade 头文件 `reshade.hpp` 等 | 同上 | BSD-3-Clause | 否（构建 `overlay-input` 时引用） |
-| Magpie | <https://github.com/Blinue/Magpie> | MIT | 否（宿主程序） |
-| OpenNR `dlss5-neural-amd` | <https://github.com/zmodelerlover/dlss5-neural-amd> | MIT | 是（`dist/amd-nr.addon64` 是该源码的**构建产物**，附本文件与版权声明） |
-| DLSSNR-AMD / `MochizukiNrRuntime.dll` | <https://github.com/mochizuki0323/DLSSNR-AMD> | MIT | 否（运行时 + `dlssnr-amd\` 权重，约 286 MB） |
-| lmxxf `dlss5-on-amd-9070xt-porting` | <https://github.com/lmxxf/dlss5-on-amd-9070xt-porting> | MIT | 否（`dlss5-amd.addon64` 与 594 MB 权重） |
-| MinHook | <https://github.com/TsudaKageyu/minhook> | MIT | 否（构建 `amd-nr.addon64` 时由上游源码携带） |
-| Intel XeSS / `libxess*.dll` | Intel | Intel 自有许可（见上游 `INTEL-XESS-LICENSE.txt`） | 否 |
-| AMD FidelityFX / `amd_fidelityfx_*.dll` | AMD | MIT（FidelityFX SDK） | 否 |
-| NVIDIA DLSS 模型权重 | NVIDIA | NVIDIA 许可 | 否（由使用时自行提取） |
+| 组件 | 来源 | 许可 | 仓库 | 发布包 |
+|---|---|---|---|---|
+| Magpie Experimental v0.6.11 | <https://github.com/SAOG0721/Magpie>（`experimental`） | **GPL-3.0** | 否 | **是**（`Magpie.exe` 及其 DLL） |
+| ReShade 6.8 | <https://github.com/crosire/reshade> | BSD-3-Clause | 否 | 是（`dxgi.dll`） |
+| ReShade 头文件 `reshade.hpp` 等 | 同上 | BSD-3-Clause | 否（构建时引用） | — |
+| OpenNR | <https://github.com/zmodelerlover/OpenNR-ReShade> | MIT | 仅 `dist/amd-nr.addon64`（构建产物 + 本仓库补丁） | 是 |
+| DLSSNR-AMD / `MochizukiNrRuntime.dll` | <https://github.com/mochizuki0323/DLSSNR-AMD>（当前 404，见 upstream.md） | MIT | 否 | 是（运行时 + `dlssnr-amd\`） |
+| lmxxf `dlss5-on-amd-9070xt-porting` | <https://github.com/lmxxf/dlss5-on-amd-9070xt-porting> | MIT | 否 | 否（594 MB 权重另行分发） |
+| RenoDX（面板风格来源） | <https://github.com/clshortfuse/renodx> | MIT | 否 | 否 |
+| MinHook | <https://github.com/TsudaKageyu/minhook> | MIT | 否（构建 `mochinr`/`amd-nr` 时引用） | — |
+| Intel XeSS / `libxess*.dll` | Intel | Intel 自有许可（见 `INTEL-XESS-LICENSE.txt`） | 否 | 是 |
+| AMD FidelityFX / `amd_fidelityfx_*.dll` | AMD | MIT（FidelityFX SDK） | 否 | 是 |
+| NVIDIA DLSS 模型权重 | NVIDIA | NVIDIA 许可 | 否 | 否（由使用者自行提取） |
 
-## 分发 `dist/` 中的产物时请注意
+## 关于 Magpie 的 GPL-3.0
 
-`dist/amd-nr.addon64` 由 MIT 许可的 OpenNR 源码构建，可再分发，但必须保留其版权与许可声明
-（见下）。`dist/overlay-input.addon64` 与 `dist/nr-router.exe`、`dist/nrtest.exe` 为本仓库代码，
-随本仓库的 MIT 许可分发。
+发布包内含 **Magpie Experimental** 的二进制，它是 **GPL-3.0** 程序。按 GPL-3 第 6 条，
+分发二进制时必须同时提供「对应源码」的可获取途径：
 
-请**不要**把 ReShade、Magpie、Intel/AMD 的 DLL 以及任何模型权重提交到本仓库或发布页——
-这些文件的再分发条款由各自权利人决定。
+- 源码：<https://github.com/SAOG0721/Magpie>，分支 `experimental`，对应 v0.6.11 的提交；
+- 许可全文：[THIRD-PARTY-LICENSES/GPL-3.0.txt](THIRD-PARTY-LICENSES/GPL-3.0.txt)。
+
+本仓库自身代码是 MIT，且**不与 Magpie 链接**（运行时通过 ReShade add-on API 加载、按文件
+摆放），因此不与 GPL 部分构成衍生作品；两者的关系是同一发行包中的**聚合分发**。
+若你要二次分发发布包，请一并保留 Magpie 的源码地址与 GPL 全文。
+
+## 分发 `dist/` 与发布包时请注意
+
+- `dist/amd-nr.addon64` 由 MIT 许可的 OpenNR 源码 + 本仓库补丁构建，可再分发，但须保留其
+  版权与许可声明（见下）。
+- `dist/overlay-input.addon64`、`dist/nr-router.exe`、`dist/nrtest.exe`、`dist/nrbench.exe`、
+  `dist/mochinr.addon64` 是本仓库代码，随本仓库 MIT 许可分发。
+- 模型权重（`dlssnr-amd\`、`DLSS5-AMD\`）与 Intel/AMD 的 DLL 的再分发条款由各自权利人决定。
 
 ## 上游版权声明
+
+### Magpie Experimental（GPL-3.0）
+
+```
+Copyright (c) SAOG0721 及 Magpie 原作者 Blinue 等贡献者
+License: GNU General Public License v3.0
+全文: THIRD-PARTY-LICENSES/GPL-3.0.txt
+源码: https://github.com/SAOG0721/Magpie
+```
 
 ### OpenNR — AMD Neural Rendering add-on（MIT）
 
@@ -62,7 +83,7 @@ MIT License
 
 Copyright (c) 2026 mochizuki0323
 
-（条款同上，全文见 https://github.com/mochizuki0323/DLSSNR-AMD 的 LICENSE）
+（条款同 OpenNR 一节；全文见上游仓库 LICENSE / HF 数据集根目录）
 ```
 
 ### lmxxf — dlss5-on-amd-9070xt-porting（MIT）
@@ -70,6 +91,13 @@ Copyright (c) 2026 mochizuki0323
 ```
 MIT License — Copyright (c) 2026 Kien
 全文见 https://github.com/lmxxf/dlss5-on-amd-9070xt-porting
+```
+
+### RenoDX（MIT）
+
+```
+MIT License — Copyright (c) RenoDX contributors
+全文见 https://github.com/clshortfuse/renodx
 ```
 
 ### ReShade（BSD-3-Clause）
@@ -89,10 +117,8 @@ modification, are permitted provided that the following conditions are met:
    without specific prior written permission.
 ```
 
-### Magpie（MIT）
-
-Copyright (c) Blinue — 全文见 <https://github.com/Blinue/Magpie/blob/main/LICENSE>。
-
 ### MinHook（MIT）
 
+```
 Copyright (c) 2009-2017 Tsuda Kageyu — 全文见上游仓库。
+```
