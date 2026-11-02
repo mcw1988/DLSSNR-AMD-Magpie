@@ -11,6 +11,9 @@
 
 排除的都是运行期产物与历代调试残留（日志、.bak/.orig/.prev、探针与 shim），
 以及开发用的 sources/、_dev-src/（v0.3 的包里带过它，属于历史遗留）。
+
+发布包内含 Magpie（GPL-3.0）的二进制，所以最后会把许可与源码指引塞进包根：
+THIRD-PARTY-NOTICES.md、LICENSE、THIRD-PARTY-LICENSES/GPL-3.0.txt、SOURCE-OF-GPL-PARTS.txt。
 """
 import argparse
 import hashlib
@@ -105,6 +108,37 @@ def main() -> int:
                     zf.write(p, f"{args.root_name}/{rel}")
                     total += p.stat().st_size
                     count += 1
+
+    # --- GPL 合规：发布包含 Magpie 二进制，必须随包给出许可与源码途径 ---
+    repo = pathlib.Path(__file__).resolve().parent.parent
+    extras = [
+        ("THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.md"),
+        ("LICENSE", "LICENSE"),
+        ("THIRD-PARTY-LICENSES/GPL-3.0.txt", "THIRD-PARTY-LICENSES/GPL-3.0.txt"),
+    ]
+    source_note = (
+        "This package contains binaries of Magpie Experimental (GPL-3.0).\n"
+        "\n"
+        "  Project : https://github.com/SAOG0721/Magpie  (branch: experimental)\n"
+        "  Version : 0.6.11 (Magpie-DLSS5-AMD-0.45)\n"
+        "  Licence : GNU General Public License v3.0 -> THIRD-PARTY-LICENSES/GPL-3.0.txt\n"
+        "\n"
+        "The rest of this package is our own work under the MIT licence, except the\n"
+        "components listed in THIRD-PARTY-NOTICES.md. Our add-ons are loaded by ReShade\n"
+        "at runtime and are not linked against Magpie.\n"
+        "\n"
+        "  Our project: https://github.com/mcw1988/DLSSNR-AMD-Magpie\n"
+    )
+    with zipfile.ZipFile(out, "a", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for rel_src, rel_zip in extras:
+            path = repo / rel_src
+            if path.is_file():
+                zf.write(path, f"{args.root_name}/{rel_zip}")
+                count += 1
+            else:
+                print(f"警告：缺少 {rel_src}，发布包不完整", file=sys.stderr)
+        zf.writestr(f"{args.root_name}/SOURCE-OF-GPL-PARTS.txt", source_note)
+        count += 1
 
     size = out.stat().st_size
     digest = hashlib.sha256()
