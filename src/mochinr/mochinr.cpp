@@ -101,6 +101,24 @@ struct Settings
     int pass2Follow = 1;
     float pass3Transfer = 1.0f, pass3Colour = 1.0f;
     int pass3Follow = 1;
+
+    // Softening the runtime already has but the panel used to leave at its defaults.
+    // Anti-halo holds every pixel inside the range the first pass's answer has around it
+    // (LMXXF_NR_FRAME_FLAG_ANTI_HALO + anti_halo_margin); it needs two or more passes.
+    int antiHalo = 0;
+    float antiHaloMargin = 0.05f;
+    // Preprocess: change the picture the network is shown and take every change back out of its
+    // answer, so it changes *how* the network edits the frame. Turning it on rebuilds the network.
+    int preprocess = 0;
+    int preprocessExposure = 1;   // 0 off, 1 auto (histogram), 2 fixed (bias alone)
+    float preprocessBias = 0.0f;  // EV, -8..8
+    int preprocessCurve = 3;      // 0 none 1 neutral 2 reinhard 3 filmic 4 gt 5 aces 6 agx
+    float preprocessContrast = 1.0f;    // about mid grey, 0.5..2
+    float preprocessSaturation = 1.0f;  // 0.05..1
+    // Below 100% model scale, how the model's result reaches the frame. Classic Catmull-Rom /
+    // Lanczos / FSR1 are sharp resamplers -- pick bilinear or matched residual to stay soft.
+    int enlargeMode = 0;    // 0 matched residual, 1 edge-aware, 2 classic
+    int classicScaler = 1;  // 0 bilinear, 1 Catmull-Rom, 2 Lanczos3, 3 FSR1
 };
 
 Settings g_cfg;
@@ -135,6 +153,22 @@ void LoadSettings(const std::wstring &dir)
         else if (_stricmp(key, "detail_stability") == 0) g_cfg.detailStability = atoi(val);
         else if (_stricmp(key, "chained_history") == 0) g_cfg.chainedHistory = atoi(val);
         else if (_stricmp(key, "follow_input_res") == 0) g_cfg.followInputRes = atoi(val);
+        else if (_stricmp(key, "pass2_follow") == 0) g_cfg.pass2Follow = atoi(val) != 0;
+        else if (_stricmp(key, "pass2_transfer") == 0) g_cfg.pass2Transfer = (float)atof(val);
+        else if (_stricmp(key, "pass2_colour") == 0) g_cfg.pass2Colour = (float)atof(val);
+        else if (_stricmp(key, "pass3_follow") == 0) g_cfg.pass3Follow = atoi(val) != 0;
+        else if (_stricmp(key, "pass3_transfer") == 0) g_cfg.pass3Transfer = (float)atof(val);
+        else if (_stricmp(key, "pass3_colour") == 0) g_cfg.pass3Colour = (float)atof(val);
+        else if (_stricmp(key, "anti_halo") == 0) g_cfg.antiHalo = atoi(val) != 0;
+        else if (_stricmp(key, "anti_halo_margin") == 0) g_cfg.antiHaloMargin = (float)atof(val);
+        else if (_stricmp(key, "preprocess") == 0) g_cfg.preprocess = atoi(val) != 0;
+        else if (_stricmp(key, "preprocess_exposure") == 0) g_cfg.preprocessExposure = atoi(val);
+        else if (_stricmp(key, "preprocess_bias_ev") == 0) g_cfg.preprocessBias = (float)atof(val);
+        else if (_stricmp(key, "preprocess_curve") == 0) g_cfg.preprocessCurve = atoi(val);
+        else if (_stricmp(key, "preprocess_contrast") == 0) g_cfg.preprocessContrast = (float)atof(val);
+        else if (_stricmp(key, "preprocess_saturation") == 0) g_cfg.preprocessSaturation = (float)atof(val);
+        else if (_stricmp(key, "enlarge_mode") == 0) g_cfg.enlargeMode = atoi(val);
+        else if (_stricmp(key, "classic_scaler") == 0) g_cfg.classicScaler = atoi(val);
     }
     fclose(f);
 }
@@ -566,7 +600,12 @@ void SendControls(bool force)
         sent.chainedHistory == g_cfg.chainedHistory && sent.followInputRes == g_cfg.followInputRes &&
         sent.pass2Transfer == g_cfg.pass2Transfer && sent.pass2Colour == g_cfg.pass2Colour &&
         sent.pass2Follow == g_cfg.pass2Follow && sent.pass3Transfer == g_cfg.pass3Transfer &&
-        sent.pass3Colour == g_cfg.pass3Colour && sent.pass3Follow == g_cfg.pass3Follow)
+        sent.pass3Colour == g_cfg.pass3Colour && sent.pass3Follow == g_cfg.pass3Follow &&
+        sent.antiHalo == g_cfg.antiHalo && sent.antiHaloMargin == g_cfg.antiHaloMargin &&
+        sent.preprocess == g_cfg.preprocess && sent.preprocessExposure == g_cfg.preprocessExposure &&
+        sent.preprocessBias == g_cfg.preprocessBias && sent.preprocessCurve == g_cfg.preprocessCurve &&
+        sent.preprocessContrast == g_cfg.preprocessContrast && sent.preprocessSaturation == g_cfg.preprocessSaturation &&
+        sent.enlargeMode == g_cfg.enlargeMode && sent.classicScaler == g_cfg.classicScaler)
         return;
 
     MochizukiNrControls c = g_nr.controls;   // the runtime's own defaults, captured at load
@@ -599,11 +638,33 @@ void SendControls(bool force)
     c.reno_pass_transfer_1 = g_cfg.pass3Transfer;
     c.reno_pass_color_1 = g_cfg.pass3Colour;
 
+    // Softening the runtime implements natively: anti-halo margin, preprocess stage, enlarge path.
+    // The runtime sanitises every value, but we clamp to the documented ranges so the panel and the
+    // log agree on what was sent.
+    c.anti_halo_margin = g_cfg.antiHaloMargin < 0.0f ? 0.0f : (g_cfg.antiHaloMargin > 0.5f ? 0.5f : g_cfg.antiHaloMargin);
+    c.preprocess = g_cfg.preprocess ? 1u : 0u;
+    c.preprocess_exposure =
+        (uint32_t)(g_cfg.preprocessExposure < 0 ? 0 : g_cfg.preprocessExposure > 2 ? 2 : g_cfg.preprocessExposure);
+    c.preprocess_bias_ev = g_cfg.preprocessBias < -8.0f ? -8.0f : (g_cfg.preprocessBias > 8.0f ? 8.0f : g_cfg.preprocessBias);
+    c.preprocess_curve = (uint32_t)(g_cfg.preprocessCurve < 0 ? 0 : g_cfg.preprocessCurve > 6 ? 6 : g_cfg.preprocessCurve);
+    c.preprocess_contrast =
+        g_cfg.preprocessContrast < 0.5f ? 0.5f : (g_cfg.preprocessContrast > 2.0f ? 2.0f : g_cfg.preprocessContrast);
+    c.preprocess_saturation = g_cfg.preprocessSaturation < 0.05f ? 0.05f
+                                                                : (g_cfg.preprocessSaturation > 1.0f ? 1.0f
+                                                                                                    : g_cfg.preprocessSaturation);
+    c.enlarge_mode = (uint32_t)(g_cfg.enlargeMode < 0 ? 0 : g_cfg.enlargeMode > 2 ? 2 : g_cfg.enlargeMode);
+    c.classic_scaler = (uint32_t)(g_cfg.classicScaler < 0 ? 0 : g_cfg.classicScaler > 3 ? 3 : g_cfg.classicScaler);
+
     const int32_t rc = g_nr.setControls(g_nr.session, &c);
     Log("nr: controls rc=%d passes=%u scale=%.2f transfer=%.2f colour=%.2f style=%u tone=%.2f struct=%.2f "
         "skin=%.2f guard=%.1f", rc, c.reno_passes, c.reno_resolution_scale, c.reno_transfer_strength,
         c.reno_color_strength, c.reno_style, c.reno_local_tone, c.reno_local_structure, c.reno_skin_structure,
         c.reno_style_highlight_guard);
+    Log("nr: softening anti_halo=%d margin=%.2f preprocess=%d exp=%u bias=%.2f curve=%u contrast=%.2f "
+        "saturation=%.2f enlarge=%u scaler=%u",
+        g_cfg.antiHalo && g_cfg.passes >= 2 ? 1 : 0, (double)c.anti_halo_margin, c.preprocess,
+        c.preprocess_exposure, (double)c.preprocess_bias_ev, c.preprocess_curve, (double)c.preprocess_contrast,
+        (double)c.preprocess_saturation, c.enlarge_mode, c.classic_scaler);
     sent = g_cfg;
     once = true;
 }
@@ -642,6 +703,9 @@ bool RunJob(Job &j)
         fi.color_height = j.height;
         fi.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
         fi.flags = LMXXF_NR_FRAME_FLAG_STRENGTH;
+        // Anti-halo holds each pixel inside the first pass's local range; the runtime implements it
+        // as a per-frame flag plus a margin in the controls, and only meaningful with 2+ passes.
+        if (g_cfg.antiHalo && g_cfg.passes >= 2) fi.flags |= LMXXF_NR_FRAME_FLAG_ANTI_HALO;
         if (g_cfg.debugView != 0) {
             fi.flags |= LMXXF_NR_FRAME_FLAG_DEBUG_VIEW;
             fi.debug_view = (uint32_t)g_cfg.debugView;
@@ -1126,6 +1190,16 @@ void SaveSettings()
             g_cfg.style, g_cfg.intensity, g_cfg.localTone, g_cfg.localStructure, g_cfg.skinStructure, g_cfg.autoMask,
             g_cfg.highlightGuard, g_cfg.chromaClamp, g_cfg.detailStability, g_cfg.chainedHistory,
             g_cfg.followInputRes);
+    fprintf(f, "pass2_follow=%d\npass2_transfer=%.3f\npass2_colour=%.3f\n"
+               "pass3_follow=%d\npass3_transfer=%.3f\npass3_colour=%.3f\n",
+            g_cfg.pass2Follow, g_cfg.pass2Transfer, g_cfg.pass2Colour, g_cfg.pass3Follow, g_cfg.pass3Transfer,
+            g_cfg.pass3Colour);
+    fprintf(f, "anti_halo=%d\nanti_halo_margin=%.3f\npreprocess=%d\npreprocess_exposure=%d\n"
+               "preprocess_bias_ev=%.3f\npreprocess_curve=%d\npreprocess_contrast=%.3f\n"
+               "preprocess_saturation=%.3f\nenlarge_mode=%d\nclassic_scaler=%d\n",
+            g_cfg.antiHalo ? 1 : 0, g_cfg.antiHaloMargin, g_cfg.preprocess ? 1 : 0, g_cfg.preprocessExposure,
+            g_cfg.preprocessBias, g_cfg.preprocessCurve, g_cfg.preprocessContrast, g_cfg.preprocessSaturation,
+            g_cfg.enlargeMode, g_cfg.classicScaler);
     fclose(f);
     Log("settings saved to mochinr.ini");
 }
@@ -1227,6 +1301,45 @@ void OnOverlay(effect_runtime *)
                 ImGui::SliderFloat("第 3 层细节", &g_cfg.pass3Transfer, 0.0f, 2.0f, "%.2f");
                 ImGui::SetNextItemWidth(200.0f);
                 ImGui::SliderFloat("第 3 层色彩", &g_cfg.pass3Colour, 0.0f, 1.0f, "%.2f");
+                ImGui::EndDisabled();
+                ImGui::TreePop();
+            }
+            ImGui::Spacing();
+            if (ImGui::TreeNode("软化（运行时自带）")) {
+                ImGui::TextWrapped("抗光晕：把每个像素锁在第 1 层答案的局部范围内，压掉多层叠加的\n"
+                                   "边缘亮边；需要「网络层数」≥ 2。");
+                Toggle("抗光晕", g_cfg.antiHalo);
+                ImGui::BeginDisabled(g_cfg.antiHalo == 0);
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::SliderFloat("抗光晕幅度", &g_cfg.antiHaloMargin, 0.0f, 0.5f,
+                                   g_cfg.antiHaloMargin <= 0.0f ? "关" : "%.3f");
+                ImGui::EndDisabled();
+                ImGui::Spacing();
+                ImGui::TextWrapped("预处理：先改变喂给网络的画面、再把每一处改变从答案里减回去，\n"
+                                   "改变的是网络「怎么改图」；开启后会重建一次网络。");
+                Toggle("启用预处理", g_cfg.preprocess);
+                ImGui::BeginDisabled(g_cfg.preprocess == 0);
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::Combo("曝光", &g_cfg.preprocessExposure, "关闭\0自动\0固定（仅偏置）\0");
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::SliderFloat("曝光偏置 EV", &g_cfg.preprocessBias, -8.0f, 8.0f, "%.2f");
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::Combo("曲线", &g_cfg.preprocessCurve, "无\0中性\0Reinhard\0Filmic\0GT\0ACES\0AGX\0");
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::SliderFloat("对比度", &g_cfg.preprocessContrast, 0.5f, 2.0f, "%.2f");
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::SliderFloat("饱和度", &g_cfg.preprocessSaturation, 0.05f, 1.0f, "%.2f");
+                ImGui::EndDisabled();
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("放大方式（渲染率 < 1 时）")) {
+                ImGui::TextWrapped("渲染率低于 1 时，网络结果回到整帧的走法。经典 Catmull-Rom /\n"
+                                   "Lanczos3 / FSR1 都是锐放大器，要更软就选「匹配残差」或双线性。");
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::Combo("放大方式", &g_cfg.enlargeMode, "匹配残差\0边缘感知\0经典\0");
+                ImGui::SetNextItemWidth(240.0f);
+                ImGui::BeginDisabled(g_cfg.enlargeMode != 2);
+                ImGui::Combo("经典放大器", &g_cfg.classicScaler, "双线性\0Catmull-Rom\0Lanczos3\0FSR1\0");
                 ImGui::EndDisabled();
                 ImGui::TreePop();
             }
