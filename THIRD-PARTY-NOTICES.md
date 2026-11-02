@@ -78,6 +78,11 @@ SOFTWARE.
 
 ### DLSSNR-AMD — mochizuki 运行时（MIT）
 
+作者仓库：<https://github.com/mochizuki0323/DLSSNR-AMD>。作者不提供预编译发布，发布包内的
+`MochizukiNrRuntime.dll` 与 `dlssnr-amd\` 取自 HuggingFace 数据集
+<https://huggingface.co/datasets/zmodelerlover/amd-nr> 的 `mochizuki/` 目录（重新打包，仅更换
+托管方）；版权与许可仍归原作者，本项目未作任何修改。
+
 ```
 MIT License
 
