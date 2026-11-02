@@ -40,9 +40,12 @@
 
 ## 3. mochizuki 运行时与权重（Vulkan / ACO）
 
-作者仓库 <https://github.com/mochizuki0323/DLSSNR-AMD> 在 2026-11-02 访问时返回 **404**
-（改名或转私有）。实际可用来源是 HuggingFace 数据集
-<https://huggingface.co/datasets/zmodelerlover/amd-nr>：
+作者仓库：<https://github.com/mochizuki0323/DLSSNR-AMD>（运行时 `MochizukiNrRuntime.dll`、
+SPIR-V 变体、ACO 记录、FP8/int4 权重都出自这里）。
+
+**分发方式**：作者本人不提供预编译发布，实际拿到的是 HuggingFace 数据集
+<https://huggingface.co/datasets/zmodelerlover/amd-nr> 里 `mochizuki/` 目录下的重新打包版
+（版权与许可仍是 mochizuki0323 的 MIT，只是换了托管方）。下表路径都相对该数据集根目录：
 
 | 需要什么 | 路径 | 大小 |
 |---|---|---|
@@ -113,7 +116,9 @@ dlssnr-amd\
 
 - **SAOG0721** — Magpie Experimental，整套捕获与缩放链路的地基；
 - **lmxxf（Kien）** — 第一个把 DLSS 神经渲染搬到 AMD 的人之一，`mochinr` 的钩子写法直接来自其工程；
-- **mochizuki0323（望月）** — mochizuki 运行时：用 Vulkan + FP8 把这套网络做得又快又省；
+- **mochizuki0323（望月）** — mochizuki 运行时
+  （[mochizuki0323/DLSSNR-AMD](https://github.com/mochizuki0323/DLSSNR-AMD)）：
+  用 Vulkan + FP8 把这套网络做得又快又省，是整个 NR 后端的核心；
 - **zmodelerlover** — OpenNR 宿主与 RenoDX 风格面板，本项目 add-on 工程结构与参数组织都受益于此；
 - **crosire** — ReShade，本项目所有 add-on 的宿主与 API；
 - 以及 **danielblnc**、**TheAutomatic** 等把 DLSS-NR 带到 AMD 的先行者。
