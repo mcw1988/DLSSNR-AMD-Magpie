@@ -265,6 +265,8 @@ if ($LogPath) {
 }
 
 # --- 汇总 ------------------------------------------------------------------
+# 在 if 外初始化：末尾的退出码要读它，而 StrictMode 下未定义的变量会直接报错。
+$failures = 0
 if ($Summary) {
     if (-not (Test-Path $OutCsv)) {
         Write-Host "要汇总的 CSV 不存在：$OutCsv" -ForegroundColor Red
@@ -360,9 +362,11 @@ if ($Summary) {
     Write-Host ''
     if ($failures -eq 0) {
         Write-Host '汇总：没有失败项。' -ForegroundColor Green
-    } else {
-        Write-Host ("汇总：{0} 项失败。" -f $failures) -ForegroundColor Red
+        exit 0
     }
+    # 汇总的全部意义就是给 CI/验收当闸门：有失败项还退 0，等于把闸门废掉。
+    Write-Host ("汇总：{0} 项失败。" -f $failures) -ForegroundColor Red
+    exit 1
 }
 
 exit 0

@@ -110,6 +110,9 @@ Write-Host '宿主工作区干净' -ForegroundColor Green
 # 校验通过后必须先实打（叠加补丁才有可校验的上下文）。-CheckOnly 会在 finally 里全部还原。
 $stacked = New-Object System.Collections.ArrayList
 $failure = $null
+# 还原是否走过兜底路径（-R 失败 → checkout）。走过就说明校验期间工作区被外部改动，
+# 这一次的"干跑通过"不可信，不能报绿。
+$restoreFallback = $false
 try {
     foreach ($name in $patches) {
         $path = Join-Path $patchDir $name
@@ -141,6 +144,7 @@ try {
             & $git -C $SourceDir apply -R $stacked[$i]
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "-R $(Split-Path $stacked[$i] -Leaf) 失败（原因见上），准备自动兜底" -ForegroundColor Red
+                $restoreFallback = $true
             }
         }
         $left = @(& $git -C $SourceDir status --porcelain)
@@ -149,6 +153,7 @@ try {
             # 路径上的改动全是本脚本打上去的，直接 checkout 回去是安全的。
             # 补丁集当前只碰这两个文件；将来扩大范围要同步改这里。
             Write-Host 'git apply -R 未能还原，改用 checkout 兜底' -ForegroundColor Yellow
+            $restoreFallback = $true
             & $git -C $SourceDir checkout -- src/Magpie.Core/FSR3Upscaler.cpp src/Magpie.Core/FSR3Upscaler.h
             $left = @(& $git -C $SourceDir status --porcelain)
             if ($left.Count -gt 0) {
@@ -165,6 +170,13 @@ try {
 if ($failure) { throw $failure }
 
 if ($CheckOnly) {
+    if ($restoreFallback) {
+        # 树已经还原干净了，但这次"校验"是在被外部改动过的树上做的：
+        # 干跑结论不可信，不能报绿——CI 里报绿等于让一次无效校验通过。
+        Write-Host '本次校验不可信：还原阶段走的 git apply -R 曾失败（校验期间工作区被外部改动）。' -ForegroundColor Red
+        Write-Host '  工作区已用 checkout 兜底还原干净，但"补丁可应用"这个结论不成立，请在没有并发改动的树上重跑。' -ForegroundColor Yellow
+        exit 1
+    }
     Write-Host ''
     Write-Host '干跑通过，未留下任何改动。实打用：' -ForegroundColor Green
     Write-Host "  powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage $Stage"
