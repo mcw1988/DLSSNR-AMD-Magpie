@@ -37,6 +37,42 @@ powershell -ExecutionPolicy Bypass -File scripts/build-all.ps1
 所有目标都用 **`/MT` 静态 CRT**：游戏目录里常躺着旧版 `msvcp140.dll`，`/MD` 会让私有副本覆盖
 运行库，`DllMain` 可能在 ReShade 注册之后失败。
 
+## 给宿主打补丁
+
+`src/magpie-patches/` 里的两个补丁改的是**宿主 Magpie**（`src/Magpie.Core/FSR3Upscaler.cpp`），
+不是本仓库的组件，所以**不走 `build-all.ps1`**，要用宿主的 MSBuild：
+
+```powershell
+# 1) 应用补丁（-Stage 1 只打阶段 1；-Stage 2 按序打两个；默认 -SourceDir 是 ..\magpie）
+powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage 1 -CheckOnly   # 干跑
+powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage 1              # 实打
+
+# 2) 打开 FSR3 编译开关（不是改 BuildOptions.props！它要求走 .user 覆盖）
+#    <Magpie 源码>\src\BuildOptions.props.user:
+#      <Project><PropertyGroup><EnableFSR3ZeroMV>true</EnableFSR3ZeroMV></PropertyGroup></Project>
+
+# 3) 出 Release
+powershell -ExecutionPolicy Bypass -File <Magpie 源码>\scripts\Build-Release.ps1
+```
+
+脚本会先校验 `git rev-parse HEAD` 是不是基准提交 `6940f84`，再 `git apply --check` 干跑，
+最后实打；不匹配会直接报错并提示"补丁只对基准提交有效"，**不会** `--3way` 硬合。
+`-CheckOnly` 结束时会把宿主工作区还原干净。
+
+运行期配置走环境变量（`Initialize` 里读一次，不支持运行期切换）：
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `MAGPIE_FSR_SLOTS` | 3 | 环形槽数 1–4；`1` = 完全回到上游行为 |
+| `MAGPIE_FSR_OUTPUT_LAG` | 0 | `1` = 输出晚一帧（阶段 2） |
+
+细节（基准提交、补丁顺序、显存代价、与 `mochinr` 的 `inflight` 联动、回退方式）见
+[`src/magpie-patches/README.md`](../src/magpie-patches/README.md)，设计与验收判据见
+[docs/multislot.md](multislot.md)。
+
+> 本机没有 C++ 编译器，这两个补丁**只在静态层面自检过，没有编译过**；
+> 首次构建时如果 MSVC 报错，请按 [multislot.md](multislot.md) §3 的伪代码核对，不要把错改到文档里。
+
 ## 手工编译（自有组件）
 
 `cl.exe` 需要 `INCLUDE` / `LIB` 指向 MSVC + SDK，脚本里就是这么设的，等价命令：

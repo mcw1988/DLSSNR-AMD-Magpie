@@ -1,0 +1,184 @@
+0002 - FSR3Upscaler 输出晚一帧（阶段 2：OUTPUT_LAG = 1）
+
+上游仓库: https://github.com/SAOG0721/Magpie
+分支:     experimental
+基准提交: 6940f84 fix(release): keep worktree outputs in the workspace release directory
+改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+89/-13)
+依赖:     必须叠加在 0001-fsr3-slot-ring.patch 之上（同一个文件、同一段代码），不能单独应用
+应用:     git -C <Magpie 源码目录> apply 0001-fsr3-slot-ring.patch
+          git -C <Magpie 源码目录> apply 0002-fsr3-output-lag.patch
+          （或 scripts/apply-magpie-patch.ps1 -Stage 2，脚本会按序应用两个补丁）
+生成:     git diff（在 0001 已经暂存的基础上做，所以本文件是 0001 之上的增量）
+
+注意：本补丁只对基准提交 6940f84 + 0001 有效。宿主更新后必须重制，不要直接 apply。
+
+diff --git a/src/Magpie.Core/FSR3Upscaler.cpp b/src/Magpie.Core/FSR3Upscaler.cpp
+index 7df2d49..c4ecea5 100644
+--- a/src/Magpie.Core/FSR3Upscaler.cpp
++++ b/src/Magpie.Core/FSR3Upscaler.cpp
+@@ -5,6 +5,7 @@
+ 
+ #ifdef MP_ENABLE_FSR3_ZEROMV
+ #include <d3d12.h>
++#include <deque>
+ #include <ffx_api.h>
+ #include <dx12/ffx_api_dx12.h>
+ #include <ffx_upscale.h>
+@@ -103,6 +104,16 @@ struct FSR3Upscaler::Impl {
+ 	uint64_t drawSerial = 0;
+ 	uint32_t lag = 0;
+ 
++	// 「输出晚一帧」的结果 FIFO。只有一个消费者（Draw 开头的收割段），
++	// 深度恒等于 lag（0 或 1），不做无界队列（multislot.md §3.4）。
++	struct Result {
++		uint32_t slotIndex = 0;
++		uint64_t islandValue = 0;
++		uint64_t drawSerial = 0;
++	};
++	std::deque<Result> results;
++	uint64_t harvestMiss = 0;
++
+ 	// 失败即 poisoned（multislot.md §4 F7），不做局部重试。
+ 	bool failed = false;
+ 	uint64_t framesDropped = 0;
+@@ -412,7 +423,20 @@ bool FSR3Upscaler::Initialize(
+ 		slotCount = Impl::kMaxSlots;
+ 	}
+ 	impl->slots.resize(slotCount);
+-	impl->lag = 0;
++
++	// 输出延迟：0 = 本帧输入本帧输出（与上游逐帧一致）；1 = 晚一帧（阶段 2）。
++	// 只在 Initialize 读一次，**不允许运行期切换**——切换等价于一次 Resize 级抖动（§4 F5）。
++	uint32_t lag = ReadEnvUint(L"MAGPIE_FSR_OUTPUT_LAG", 0);
++	if (lag > 1u) {
++		Logger::Get().Warn(fmt::format("MAGPIE_FSR_OUTPUT_LAG={} is out of range [0,1]; using 0", lag));
++		lag = 0;
++	}
++	if (lag == 1u && slotCount < 2u) {
++		// F4：slack = slots - lag 必须 >= 1，否则同一帧既收割又提交同一个槽。
++		Logger::Get().Warn("FSR3 output lag 1 requires at least 2 slots; falling back to lag 0");
++		lag = 0;
++	}
++	impl->lag = lag;
+ 
+ 	// 槽 0 必须先建：aux 清理要用它的 allocator / list 录一次并在建围栏之前提交，
+ 	// 其余槽等围栏与 WaitForQueue 之后再建，否则 aux 屏障会落在还没建的 list 上。
+@@ -592,6 +616,13 @@ bool FSR3Upscaler::Drain() noexcept {
+ 		return false;
+ 	}
+ 	for (Impl::Slot& slot : impl.slots) slot.pending = false;
++	// lag=1 时最后一帧的结果还挂在 FIFO 里，这是正常状态，必须在这里收尾而不是在析构里
++	// 静默丢弃（§4 F12）：清空即"已收尾"，不留悬挂条目。
++	if (!impl.results.empty()) {
++		Logger::Get().Info(fmt::format("fsr3-slot: drain released {} pending lag result(s)",
++			(uint32_t)impl.results.size()));
++		impl.results.clear();
++	}
+ 	// Drain() 没有目标纹理参数，所以这里只交出工作、不拷贝任何东西；
+ 	// 主机停流时会整体重建效果链，这一帧不呈现。
+ 	impl.context11->Flush();
+@@ -609,8 +640,41 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+ 	impl.resetHistory |= guidanceReset || drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
+ 
+ 	// 槽游标：按 Draw 调用次数取模，不按 captureFrameId（补帧下一个内容帧对应多次 Draw）。
+-	Impl::Slot& slot = impl.slots[(size_t)(impl.drawSerial++ % (uint64_t)impl.slots.size())];
++	const size_t slotIndex = (size_t)(impl.drawSerial % (uint64_t)impl.slots.size());
++	const bool hadResult = !impl.results.empty();
++
++	// F4：slack = slots - lag 必须 >= 1。lag=1 时收割的槽绝不能是本帧要提交的槽，
++	// 否则同一个 output11 会一边被拷出一边被岛重写。
++	if (hadResult && impl.results.front().slotIndex == (uint32_t)slotIndex) {
++		impl.failed = true;
++		++impl.framesDropped;
++		Logger::Get().Error("FSR3 ring invariant violated: harvested slot equals the submitted slot (slots - lag must be >= 1)");
++		return false;
++	}
++	Impl::Slot& slot = impl.slots[slotIndex];
++	++impl.drawSerial;
++
++	// ── A. 收割 ────────────────────────────────────────────────────
++	// 把上一次提交的岛的结果拷出去：ctx.output 在本帧只被写一次，写点从"本帧末尾"
++	// 挪到"本帧开头"，主机所有下游 pass 会自然排在它之后（D3D11 FIFO）。这里只做
++	// GPU 侧等待，绝不 CPU 阻塞——这是阶段 2 的全部意义。
++	if (hadResult) {
++		const Impl::Result result = impl.results.front();
++		impl.results.pop_front();
++		// 岛到本帧开头还没做完就是 harvestMiss：>5% 说明岛比帧间隔长（§6.2 B1）。
++		if (impl.fence12->GetCompletedValue() < result.islandValue) ++impl.harvestMiss;
++		const HRESULT harvestHr = impl.context11->Wait(impl.fence11.get(), result.islandValue);
++		if (FAILED(harvestHr)) {
++			impl.failed = true;
++			++impl.framesDropped;
++			Logger::Get().ComError("Wait FSR3 harvest fence on the D3D11 queue failed", harvestHr);
++			return false;
++		}
++		impl.context11->CopyResource(output, impl.slots[result.slotIndex].output11.get());
++		impl.slots[result.slotIndex].pending = false;
++	}
+ 
++	// ── B. 为"本帧输入"提交一个新岛 ─────────────────────────────────
+ 	// 认领槽：只等"自己的"岛。上游这里等的是上一帧；现在等的是 slots 次 Draw 之前提交的岛，
+ 	// 稳态下 GetCompletedValue 直接放行（multislot.md §3.3 第 1 步）。
+ 	const double waitBeginMs = NowMs();
+@@ -741,6 +805,11 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+ 		Logger::Get().ComError("Signal FSR3 island fence failed", hr);
+ 		return false;
+ 	}
++	// lag=1 才把本帧结果挂进 FIFO，留给下一帧开头拷出；lag=0 时 FIFO 恒空，
++	// 本帧结果在 C 段按上游语义立刻拷出（深度恒等于 lag，不做无界队列）。
++	if (impl.lag == 1u) {
++		impl.results.push_back({ (uint32_t)slotIndex, islandValue, impl.drawSerial });
++	}
+ 
+ 	// islandValueLag：提交瞬间"已提交的围栏值"与"已完成的围栏值"之差（单位是围栏值，
+ 	// 每个岛占 2）。稳态下应稳定在 2*(slots-1) 以内，突然长大说明岛变慢了。
+@@ -749,15 +818,20 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+ 	impl.statIslandLagSum += islandLag;
+ 	if (islandLag > impl.statIslandLagMax) impl.statIslandLagMax = islandLag;
+ 
+-	// 本帧就要结果，与上游一致：串行点 2（D3D11 GPU 侧等待）保留。
+-	hr = impl.context11->Wait(impl.fence11.get(), islandValue);
+-	if (FAILED(hr)) {
+-		impl.failed = true;
+-		++impl.framesDropped;
+-		Logger::Get().ComError("Wait FSR3 island fence on the D3D11 queue failed", hr);
+-		return false;
++	// ── C. 同步路径 / 冷启动 ────────────────────────────────────────
++	// lag=0 时这就是上游语义（本帧输入本帧输出，串行点 2 保留）；lag=1 时它只在
++	// 进函数时 FIFO 为空的情况下走（会话第一帧 / Resize 后 / 从失败恢复），
++	// 代价是 U(1) 被呈现两次（F5 的"一帧重复"，~8–20 ms 的画面静止，不会重复发生）。
++	if (!hadResult) {
++		hr = impl.context11->Wait(impl.fence11.get(), islandValue);
++		if (FAILED(hr)) {
++			impl.failed = true;
++			++impl.framesDropped;
++			Logger::Get().ComError("Wait FSR3 island fence on the D3D11 queue failed", hr);
++			return false;
++		}
++		impl.context11->CopyResource(output, slot.output11.get());
+ 	}
+-	impl.context11->CopyResource(output, slot.output11.get());
+ 
+ 	impl.resetHistory = false;
+ 	if (guidanceReset) impl.lastGuidanceResetFrameId = drawContext.frameId;
+@@ -765,16 +839,17 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+ 	++impl.statWindowDraws;
+ 	if (impl.statWindowDraws >= kStatsInterval) {
+ 		Logger::Get().Info(fmt::format(
+-			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} failed={} slots={} lag={}",
++			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} harvestMiss={}/{} failed={} slots={} lag={}",
+ 			impl.drawSerial,
+ 			impl.statSlotWaitMs / (double)impl.statWindowDraws,
+ 			(double)impl.statIslandLagSum / (double)impl.statWindowDraws,
+-			impl.statIslandLagMax, impl.framesDropped,
+-			(uint32_t)impl.slots.size(), impl.lag));
++			impl.statIslandLagMax, impl.harvestMiss, impl.statWindowDraws,
++			impl.framesDropped, (uint32_t)impl.slots.size(), impl.lag));
+ 		impl.statWindowDraws = 0;
+ 		impl.statSlotWaitMs = 0.0;
+ 		impl.statIslandLagSum = 0;
+ 		impl.statIslandLagMax = 0;
++		impl.harvestMiss = 0;
+ 	}
+ 	return true;
+ }

@@ -54,9 +54,13 @@ lmxxf 权重体积太大不在包内，需要时另取
 
 **后续优化方向**：
 
-1. **单槽拆解主线**：给 `FSR3Upscaler` 加 2–3 槽共享纹理环形缓冲，让 N+1 拷入与 N 帧岛重叠
-   （[docs/bridge.md](docs/bridge.md) §8.4 方向 3，已裁决 Go）。预期帧时间收益：0.5 档 −3~4.5 ms
-   （输出 120→约 150），1.0 档 −7~8 ms（47→约 70）；上下界由 B1/B2 实测锚定。
+1. **单槽拆解主线（进行中）**：给 `FSR3Upscaler` 加 2–3 槽共享纹理环形缓冲，让 N+1 拷入与
+   N 帧岛重叠（[docs/bridge.md](docs/bridge.md) §8.4 方向 3，已裁决 Go）。**设计已定稿见
+   [docs/multislot.md](docs/multislot.md)，补丁已就绪**（`src/magpie-patches/` 阶段 1 + 阶段 2，
+   用 `scripts/apply-magpie-patch.ps1` 应用），**待 G0 判别实验放行**——先证明 GPU 没被占满，
+   否则"取大"拿不到东西。
+   预期收益要分清：0.5 档 −3~4.5 ms（→约 123 fps，即 B2 天花板）、1.0 档 −7~8 ms（47→约 66–70）
+   属于**阶段 2（输出晚一帧）**；阶段 1 单独上线的期望收益是 **0**（发布处已经排空，见 multislot.md §1.3）。
 2. **Motion 线**：mochinr 目前不传运动矢量（TEMPORAL 未解锁）；AMOF 已可默认开启，条件触发
    接近成立——推进「desc 的 kMotion → fi.motion」的成本与画质研究，与 AMOF 做取舍对比。
 
@@ -233,7 +237,9 @@ src/nr-router/      效果组 → 后端的互斥路由（C++ / Win32）
 src/overlay-input/  ReShade add-on：把键鼠喂进 Magpie 的渲染窗口
 src/nrtest/         运行时冒烟测试（nrtest）与帧成本基准（nrbench）
 src/opennr-patches/ 对 OpenNR 0.7.15 的补丁（含 D3D11↔D3D12 共享围栏）
-scripts/            一键构建、上游获取、打发布包
+src/magpie-patches/ 对宿主 Magpie 6940f84 的补丁：FSR3Upscaler 多槽环形缓冲 + 输出晚一帧
+tools/              纸面模型（slot_model.py：单槽/多槽调度的离散事件仿真）
+scripts/            一键构建、上游获取、打发布包、给宿主打补丁
 docs/               架构、构建、使用、排错、上游清单、实测数据、结论、桥接拆解（bridge.md）
 dist/               预编译产物（由本仓库源码构建，见 dist/README.md）
 ```
