@@ -166,9 +166,17 @@ scripts\measure-fsr-ring.ps1 -OutCsv slot-test.csv -Baseline slot-test.csv -Summ
 13/13 导出、`GetModuleFileNameW` 导入存在、用 Magpie 的调用顺序驱动一遍全部返回 `0x1`、日志能落到槽位
 （`Width`→slot 5、`Color`→slot 1、`Style`→slot 6；`float` 走 XMM 所以 `arg` 是垃圾值，属预期）。
 
-**P0 有两个已知前置**：
-1. 9070 上必须**先绕过 `UnsupportedAdapter` 门**（P0 挂不到现有效果上）。所以 B 路线的两处改动要先做，否则探针不会被加载。
+**P0 的两个前置**：
+
+1. ~~9070 上必须先绕过 `UnsupportedAdapter` 门~~ → **已由 `0003-dlssnr-amd-slot.patch` 解决**：
+   补丁按 `VendorId` 选 DLL（NVIDIA → `nvngx_dlssnr.dll`，其它 → `amdgx_dlssnr.dll`），
+   并让 AMD 路径**完全不碰 `NgxD3D12Core`**（它走 NVIDIA 的 `Init_with_ProjectID`，AMD 上必失败）——
+   设备自己 `D3D12CreateDevice`，参数对象直接从 `amdgx_dlssnr.dll` 的
+   `NVSDK_NGX_D3D12_AllocateParameters/DestroyParameters` 里拿。NVIDIA 路径行为一字不变。
 2. 探针不写输出纹理 → **画面会黑/花**，属预期；日志在 `Init_Ext` 时已落盘。
+
+> `0003` 与 `0001/0002` 同状态：**已通过 `git apply --check` 与实打验证，但未在真实编译器上编译过**
+> （本机缺 `nvsdk_ngx.h` 与 conan 依赖，宿主整体构建要在 9070 机器上做）。
 
 ## 2.5 待测清单（P0 日志回来才能定）
 
@@ -177,6 +185,15 @@ scripts\measure-fsr-ring.ps1 -OutCsv slot-test.csv -Baseline slot-test.csv -Summ
 - 35 个 `DLSSNR.*` 键各自落到哪个槽位（→ 决定 shim 的实现工作量）；
 - 每帧 `EvaluateFeature` 次数是否等于 `multiPass`；
 - 资源格式与 state（直通拷贝要不要加 barrier）。
+
+## 2.6 产物
+
+| 文件 | 内容 |
+|---|---|
+| `src/nvngx-shim/probe.cpp` + `probe.def` | P0 探针桩（13 个导出、32 槽参数对象、日志） |
+| `src/nvngx-shim/selftest.cpp` + `build.ps1` | 自测宿主与一键构建（含导出表/`GetModuleFileNameW` 自检） |
+| `src/magpie-patches/0003-dlssnr-amd-slot.patch` | **AMD 路径**：按厂商选 DLL + 跳过 `NgxD3D12Core`（`+85/−25`，只动两个文件） |
+| `src/nvngx-shim/README.md` | ABI 事实表、探针用法、日志核对表 |
 
 ---
 
@@ -299,6 +316,34 @@ O  = X0 + H             // 输出
 | D3 | **线 1 阶段 1/阶段 2**（旧链） | 阶段 1 应无变化；阶段 2 看 123 / 66 |
 | D4 | **线 2 P2 接运行时** → 复测线 1 的 G0 与阶段 2（新链） | 决定主线走哪条 |
 | 兜底 | 线 3 P0/P1（自研时域） | 仅当线 2 不可行时启动 |
+
+### 4.4.1 实机测试卡（9070 机器，D1）
+
+前置：仓库已 `git pull`；VS 2022 Build Tools 已装（`cl.exe` 在 PATH 或用 `-GitExe` 类参数指向）。
+
+```powershell
+# ① 打补丁（0003 = AMD 路径；0001/0002 = 单槽，可同一次全打）
+powershell -ExecutionPolicy Bypass -File scripts\apply-magpie-patch.ps1 -Stage 2 -IncludeAmdSlot -CheckOnly   # 干跑
+powershell -ExecutionPolicy Bypass -File scripts\apply-magpie-patch.ps1 -Stage 2 -IncludeAmdSlot              # 实打
+
+# ② 打开 FSR3 开关并构建宿主（产物在 <源码上一级>\release\<名字>\Magpie-Experimental-x64\）
+#    新建 src\BuildOptions.props.user：EnableFSR3ZeroMV=true
+powershell -ExecutionPolicy Bypass -File <Magpie 源码>\scripts\Build-Release.ps1 -ReleaseDirectory p0 -Version 0.6.11-amd
+
+# ③ 放探针（注意：探针文件名必须是 amdgx_dlssnr.dll，不要覆盖 nvngx_dlssnr.dll）
+copy src\nvngx-shim\build\nvngx_dlssnr.dll <部署目录>\amdgx_dlssnr.dll
+copy <部署目录>\Magpie.exe <部署目录>\Magpie.exe.bak     # 便于回退
+
+# ④ 开 Magpie，效果组挂 DLSSNR\DLSSNR_AI_Filter，进游戏跑 10–20 秒后关闭
+#    日志会出现 "DLSSNR AMD path selected: amdgx_dlssnr.dll"（magpie.log）
+#    探针日志在 <部署目录>\nvngx-shim.log
+
+# ⑤ 同一次会话顺便跑线 1 的 G0（零代码）
+powershell -ExecutionPolicy Bypass -File scripts\measure-gpu-busy.ps1 -SourceDir <部署目录> -Seconds 30 -OutFile D:\gpu-busy.csv
+```
+
+**判读**：`nvngx-shim.log` 里出现 `Init_Ext → AllocateParameters → PARAM: slot=N name="DLSSNR.*" → 每帧 EvaluateFeature`
+即 P0 通过；把这份日志发回来，就能定成功码 / feature 号 / 35 个键的槽位映射，P1/P2 就是接线。
 
 ## 4.5 统一记录（三条线共用）
 

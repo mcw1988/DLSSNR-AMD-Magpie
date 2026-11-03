@@ -21,20 +21,23 @@ Magpie 是 GPL-3.0，我们按 GPL-3 第 6 条只做聚合分发并给出对应�
 （`Renderer.cpp:4614-4624`）是第三个串行点，一旦顺手改掉，"阶段 1 收益为 0"这个结论就再也无法归因
 （multislot.md §7.3）。
 
-## 两个补丁
+## 三个补丁
 
-必须**按序**应用，不能合并成一个：回滚单位就是补丁单位。
+`0001/0002` 必须**按序**应用，不能合并成一个：回滚单位就是补丁单位。
+`0003` 与它们**不相干**（不同文件），可单独或任意组合应用。
 
 | 补丁 | 阶段 | 作用 | 环境变量 | 预期收益 |
 |---|---|---|---|---|
 | `0001-fsr3-slot-ring.patch` | 阶段 1 | `FSR3Upscaler` 的共享纹理/allocator/command list 由单份改为 **N 槽环形**（默认 3，上限 4），每槽记自己的 `islandValue`；认领槽只等自己的岛；新增 `Drain()` 覆盖与 `fsr3-slot:` 统计行 | `MAGPIE_FSR_SLOTS`（默认 3） | **0**（设计断言：输出语义与上游逐帧一致，性能应当不变） |
 | `0002-fsr3-output-lag.patch` | 阶段 2 | 在 0001 之上加"输出晚一帧"：`deque<Result>` 深度恒等于 lag，收割放在 `Draw` 开头（只做 GPU 侧等待），冷启动退回同步语义 | `MAGPIE_FSR_OUTPUT_LAG`（默认 0，仅 0/1） | 帧时间从「求和」变「取大」：s=0.5/0.35 → 约 123 fps；s=1.0 → 66（保守）～70 |
+| `0003-dlssnr-amd-slot.patch` | 独立 | `DLSSNR_AI_Filter` 按厂商选 DLL：NVIDIA → `nvngx_dlssnr.dll`（行为不变）；其余 → `amdgx_dlssnr.dll`，且**不碰 `NgxD3D12Core`**（设备自建、参数对象从该 DLL 里拿） | — | 让 AMD 也能跑这个槽位；为 `src/nvngx-shim/` 的探针/运行时提供入口 |
 
 阶段 1 **单独上线不会变快**，这不是失败：主机每发布一帧都要在 `Renderer.cpp:4614-4624` 把 D3D11
 队列排空一次，`:497` 的 CPU 阻塞在稳态下本来就是空转。阶段 1 的价值是**解除 allocator / 纹理的复用
 依赖**，也就是阶段 2 的前置条件。详见 multislot.md §1.3。
 
 `0002` 必须叠在 `0001` 之上（同一个文件、同一段代码），单独应用会失败。
+`0003` 只动 `DLSSNRFilter.cpp` 与 `NativeEffectBackendFactory.cpp`，与上面两个不冲突。
 
 ## 怎么应用
 
@@ -56,6 +59,7 @@ git -C <Magpie 源码目录> rev-parse --short HEAD      # 必须 6940f84
 git -C <Magpie 源码目录> apply --check <本目录>\0001-fsr3-slot-ring.patch
 git -C <Magpie 源码目录> apply <本目录>\0001-fsr3-slot-ring.patch
 git -C <Magpie 源码目录> apply <本目录>\0002-fsr3-output-lag.patch   # 阶段 2
+git -C <Magpie 源码目录> apply <本目录>\0003-dlssnr-amd-slot.patch   # 独立：AMD 槽位（可选）
 ```
 
 > **补丁只适用于基准提交 `6940f84`。** 宿主更新（哪怕只动了 `FSR3Upscaler.cpp` 的相邻行）后

@@ -7,6 +7,7 @@
 #   powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage 1 -CheckOnly
 #   powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage 1
 #   powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage 2
+#   powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -Stage 2 -IncludeAmdSlot   # 顺带 0003
 #   powershell -ExecutionPolicy Bypass -File scripts/apply-magpie-patch.ps1 -SourceDir D:\Magpie-exp -Stage 2
 param(
     # Magpie 源码工作副本（默认与本仓库同级的 magpie）
@@ -14,6 +15,8 @@ param(
     # 1 = 只打阶段 1；2 = 按序打阶段 1 + 阶段 2
     [ValidateSet(1, 2)]
     [int]$Stage = 1,
+    # 顺带打 0003（DLSSNR_AMD 路径）：与 0001/0002 不同文件，可任意组合
+    [switch]$IncludeAmdSlot,
     # 只校验，结束时还原到调用前的状态
     [switch]$CheckOnly,
     # git.exe 的完整路径；不填则依次找 PATH、Git for Windows 的默认安装位置、where.exe
@@ -64,6 +67,11 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 $patches = @('0001-fsr3-slot-ring.patch')
 if ($Stage -ge 2) {
     $patches += '0002-fsr3-output-lag.patch'
+}
+if ($IncludeAmdSlot) {
+    # 0003 只动 DLSSNRFilter.cpp / NativeEffectBackendFactory.cpp，与上面两个不相干，
+    # 放在最后单独 check 即可。
+    $patches += '0003-dlssnr-amd-slot.patch'
 }
 $lastPatch = $patches[-1]
 

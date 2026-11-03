@@ -1,0 +1,259 @@
+From: DLSSNR-AMD-Magpie
+Subject: [PATCH 0003] DLSSNR_AI_Filter: 按厂商选 DLL，AMD 走 amdgx_dlssnr.dll 自管路径
+
+基准提交：6940f84（SAOG0721/Magpie experimental）
+适用顺序：在 0001/0002 之后（或单独应用）；只动 DLSSNRFilter.cpp 与 NativeEffectBackendFactory.cpp
+
+目的
+----
+让 DLSSNR\DLSSNR_AI_Filter 在非 NVIDIA 适配器上也能把 NVSDK_NGX 调用打到我们自己的
+amdgx_dlssnr.dll（探针桩 / P2 运行时）上。NVIDIA 路径行为一字不变。
+
+三条既有事实（源码）驱动了这个改法：
+1. 宿主从应用目录按名加载 nvngx_dlssnr.dll，只查存在性与导出，不验签
+   （DLSSNRFilter.cpp:1435-1470）；
+2. NativeEffectBackendFactory.cpp:145 有一道 nonNvidia 短路，非 0x10DE 时 Initialize
+   根本不被调用 —— 所以"只换 DLL"在 AMD 上什么都不会发生，必须同时去掉这道门；
+3. NgxD3D12Core 走 NVSDK_NGX_D3D12_Init_with_ProjectID（NVIDIA 的 core 会话），
+   在 AMD 上必失败。所以 AMD 路径不能碰它：设备自己建，参数对象直接从 amdgx_dlssnr.dll
+   的 NVSDK_NGX_D3D12_AllocateParameters/DestroyParameters 里拿。
+
+改动清单
+--------
+* DLSSNRFilter.cpp
+  - Impl 新增 amdMode + amdAllocParameters/amdDestroyParameters（AMD 路径专用）
+  - InitializeChain：按 DXGI_ADAPTER_DESC1.VendorId 决定路径；非 0x10DE 时
+    D3D12CreateDevice 自建设备，跳过 ngxCore.Acquire，不置 coreRegistered
+  - InitializeSignedSnippetSession：按 amdMode 选 amdgx_dlssnr.dll / nvngx_dlssnr.dll；
+    AMD 额外解析 AllocateParameters/DestroyParameters，缺一即视为导出不完整
+  - 参数分配（本体与后续 pass 的 child）按 amdMode 分流
+  - ~Impl 销毁参数按 amdMode 分流（AMD 的参数必须由分配它的 DLL 销毁）
+  - 多趟 child 继承 amdMode 与两个函数指针
+  - 头部补 <dxgi1_2.h>（DXGI_ADAPTER_DESC1）
+* NativeEffectBackendFactory.cpp
+  - 去掉 nonNvidia 短路与 UnsupportedAdapter 失败分支（改由 DLSSNRFilter 自报失败）
+
+验收
+----
+本补丁未在真实编译器上验证过（与 0001/0002 同状态）。上机后按下列顺序验：
+1) 编译通过；
+2) NVIDIA 机：行为与未打补丁时一致（日志仍是 nvngx_dlssnr.dll）；
+3) AMD 机：日志出现 "DLSSNR AMD path selected: amdgx_dlssnr.dll"，
+   且 amdgx_dlssnr.dll 的 nvngx-shim.log 出现 Init_Ext → AllocateParameters → PARAM 序列。
+---
+diff --git a/src/Magpie.Core/DLSSNRFilter.cpp b/src/Magpie.Core/DLSSNRFilter.cpp
+index 5e23384..dc8cc71 100644
+--- a/src/Magpie.Core/DLSSNRFilter.cpp
++++ b/src/Magpie.Core/DLSSNRFilter.cpp
+@@ -17,6 +17,7 @@
+ #include "OpticalFlowSettings.h"
+ #include "StrHelper.h"
+ #include <winver.h>
++#include <dxgi1_2.h>   // DXGI_ADAPTER_DESC1：按厂商选 nvngx_dlssnr.dll / amdgx_dlssnr.dll
+ #pragma comment(lib, "version.lib")
+ 
+ namespace Magpie {
+@@ -573,6 +574,8 @@ struct DLSSNRFilter::Impl {
+ 	using CreateFeatureFn = NVSDK_NGX_Result(NVSDK_CONV*)(
+ 		ID3D12GraphicsCommandList*, NVSDK_NGX_Feature, NVSDK_NGX_Parameter*,
+ 		NVSDK_NGX_Handle**);
++	using AmdAllocParametersFn = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Parameter**);
++	using AmdDestroyParametersFn = NVSDK_NGX_Result(NVSDK_CONV*)(NVSDK_NGX_Parameter*);
+ 	using EvaluateFeatureFn = NVSDK_NGX_Result(NVSDK_CONV*)(
+ 		ID3D12GraphicsCommandList*, const NVSDK_NGX_Handle*,
+ 		const NVSDK_NGX_Parameter*, PFN_NVSDK_NGX_ProgressCallback);
+@@ -585,6 +588,11 @@ struct DLSSNRFilter::Impl {
+ 	ID3D11Device5* device11 = nullptr;
+ 	ID3D11DeviceContext4* context11 = nullptr;
+ 	NgxD3D12Core* coreOwner = nullptr;
++	// AMD 路径：不碰 NgxD3D12Core（它走 NVIDIA 的 Init_with_ProjectID，在 AMD 上必失败）。
++	// 设备自己建、参数对象直接从 amdgx_dlssnr.dll 里拿，全部与 NVIDIA 会话隔离。
++	bool amdMode = false;
++	NVSDK_NGX_Result(NVSDK_CONV* amdAllocParameters)(NVSDK_NGX_Parameter**) = nullptr;
++	NVSDK_NGX_Result(NVSDK_CONV* amdDestroyParameters)(NVSDK_NGX_Parameter*) = nullptr;
+ 	winrt::com_ptr<ID3D12Device> device12;
+ 	winrt::com_ptr<ID3D12CommandQueue> queue12;
+ 	winrt::com_ptr<ID3D12CommandAllocator> allocator12;
+@@ -1034,7 +1042,12 @@ DLSSNRFilter::Impl::~Impl() {
+ 		feature = nullptr;
+ 	}
+ 	if (parameters) {
+-		if (!coreOwner || !coreOwner->DestroyParameters(parameters, "DLSSNR")) {
++		if (amdMode) {
++			// AMD 路径：参数对象由 amdgx_dlssnr.dll 分配，也必须由它销毁。
++			if (!amdDestroyParameters || !NGXSucceeded(amdDestroyParameters(parameters))) {
++				Logger::Get().Warn("DLSSNR AMD parameter destruction failed");
++			}
++		} else if (!coreOwner || !coreOwner->DestroyParameters(parameters, "DLSSNR")) {
+ 			Logger::Get().Warn("DLSSNR shared Core parameter destruction failed");
+ 		}
+ 		parameters = nullptr;
+@@ -1432,12 +1445,14 @@ static bool InitializeSignedSnippetSession(
+ 	const std::filesystem::path& applicationDirectory
+ ) noexcept {
+ 	const std::filesystem::path dllPath =
+-		applicationDirectory / L"nvngx_dlssnr.dll";
++		applicationDirectory / (impl.amdMode ? L"amdgx_dlssnr.dll" : L"nvngx_dlssnr.dll");
++	const char* dllNameA = impl.amdMode ? "amdgx_dlssnr.dll" : "nvngx_dlssnr.dll";
+ 	const DWORD attributes = GetFileAttributesW(dllPath.c_str());
+ 	const DWORD pathError = attributes == INVALID_FILE_ATTRIBUTES ? GetLastError() : ERROR_SUCCESS;
+ 	if (attributes == INVALID_FILE_ATTRIBUTES && (pathError == ERROR_FILE_NOT_FOUND || pathError == ERROR_PATH_NOT_FOUND)) {
+-		impl.failure = { DlssNrStage::LoadLibrary, DlssNrReason::LibraryMissing, DlssNrCodeKind::Win32, pathError, "GetFileAttributesW(nvngx_dlssnr.dll)" };
+-		Logger::Get().Error("DLSSNR library does not exist at the application path");
++		impl.failure = { DlssNrStage::LoadLibrary, DlssNrReason::LibraryMissing, DlssNrCodeKind::Win32, pathError,
++			fmt::format("GetFileAttributesW({})", dllNameA) };
++		Logger::Get().Error(fmt::format("DLSSNR library does not exist at the application path: {}", dllNameA));
+ 		return false;
+ 	}
+ 	impl.snippetModule = LoadLibraryExW(
+@@ -1445,9 +1460,9 @@ static bool InitializeSignedSnippetSession(
+ 		LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+ 	if (!impl.snippetModule) {
+ 		const DWORD code = GetLastError();
+-		impl.failure = DlssNrApiFailure(DlssNrStage::LoadLibrary, DlssNrCodeKind::Win32, code, "LoadLibraryExW(nvngx_dlssnr.dll)");
++		impl.failure = DlssNrApiFailure(DlssNrStage::LoadLibrary, DlssNrCodeKind::Win32, code, fmt::format("LoadLibraryExW({})", dllNameA));
+ 		if (impl.failure.reason == DlssNrReason::Unknown) impl.failure.reason = DlssNrReason::LibraryLoadFailed;
+-		Logger::Get().Error(fmt::format("Load signed nvngx_dlssnr.dll failed: Win32={}", code));
++		Logger::Get().Error(fmt::format("Load signed {} failed: Win32={}", dllNameA, code));
+ 		return false;
+ 	}
+ 
+@@ -1463,9 +1478,17 @@ static bool InitializeSignedSnippetSession(
+ 		impl.snippetModule, "NVSDK_NGX_D3D12_ReleaseFeature");
+ 	impl.snippetShutdown = GetExport<DLSSNRFilter::Impl::ShutdownFn>(
+ 		impl.snippetModule, "NVSDK_NGX_D3D12_Shutdown1");
++	if (impl.amdMode) {
++		// AMD 路径：参数对象不经过 NgxD3D12Core，直接从本 DLL 里分配/销毁。
++		impl.amdAllocParameters = GetExport<DLSSNRFilter::Impl::AmdAllocParametersFn>(
++			impl.snippetModule, "NVSDK_NGX_D3D12_AllocateParameters");
++		impl.amdDestroyParameters = GetExport<DLSSNRFilter::Impl::AmdDestroyParametersFn>(
++			impl.snippetModule, "NVSDK_NGX_D3D12_DestroyParameters");
++	}
+ 	if (!impl.snippetInitExt || !impl.snippetCreateFeature ||
+ 		!impl.snippetEvaluateFeature || !impl.snippetReleaseFeature ||
+-		!impl.snippetShutdown) {
++		!impl.snippetShutdown ||
++		(impl.amdMode && (!impl.amdAllocParameters || !impl.amdDestroyParameters))) {
+ 		impl.failure = { DlssNrStage::LoadLibrary, DlssNrReason::MissingExports, DlssNrCodeKind::None, 0, "Resolve required NGX exports" };
+ 		Logger::Get().Error("DLSSNR signed snippet exports are incomplete");
+ 		return false;
+@@ -2062,12 +2085,35 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
+ 		return DlssNrApiFailure(stage, kind, failure.code, failure.operation);
+ 	};
+ 	impl->failure.operation = "Acquire NGX D3D12 Core";
+-	if (!ngxCore.Acquire(resources, "DLSSNR")) {
+-		impl->failure = coreFailure(DlssNrStage::Initialize);
+-		return false;
++	// 路径由适配器决定：NVIDIA 走共享 NGX 会话；其余走 amdgx_dlssnr.dll 自管路径
++	// （NgxD3D12Core 会调 NVIDIA 的 Init_with_ProjectID，在 AMD 上必失败，因此不能碰）。
++	{
++		DXGI_ADAPTER_DESC1 adapterDesc{};
++		if (resources.GetGraphicsAdapter() &&
++			SUCCEEDED(resources.GetGraphicsAdapter()->GetDesc1(&adapterDesc))) {
++			impl->amdMode = adapterDesc.VendorId != 0x10DE;
++		}
++	}
++	if (impl->amdMode) {
++		impl->failure.operation = "Create AMD D3D12 device";
++		const HRESULT deviceHr = D3D12CreateDevice(
++			resources.GetGraphicsAdapter(), D3D_FEATURE_LEVEL_11_0,
++			IID_PPV_ARGS(impl->device12.put()));
++		if (FAILED(deviceHr)) {
++			impl->failure = DlssNrApiFailure(DlssNrStage::Initialize, DlssNrCodeKind::HResult,
++				static_cast<uint32_t>(deviceHr), "D3D12CreateDevice(amdgx)");
++			Logger::Get().ComError("Create AMD D3D12 device failed", deviceHr);
++			return false;
++		}
++		Logger::Get().Info("DLSSNR AMD path selected: amdgx_dlssnr.dll, no NGX core session");
++	} else {
++		if (!ngxCore.Acquire(resources, "DLSSNR")) {
++			impl->failure = coreFailure(DlssNrStage::Initialize);
++			return false;
++		}
++		impl->coreRegistered = true;
++		impl->device12.copy_from(ngxCore.Device());
+ 	}
+-	impl->coreRegistered = true;
+-	impl->device12.copy_from(ngxCore.Device());
+ 	impl->failure.operation = "Create DLSSNR graphics resources";
+ 	HRESULT hr = S_OK;
+ 	D3D12_COMMAND_QUEUE_DESC queueDesc{};
+@@ -2197,9 +2243,16 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
+ 	}
+ 
+ 	impl->failure = { DlssNrStage::CreateFeature, DlssNrReason::Unknown, DlssNrCodeKind::None, 0, "Allocate NGX parameters" };
+-	if (!ngxCore.AllocateParameters(&impl->parameters, "DLSSNR")) {
+-		impl->failure = coreFailure(DlssNrStage::CreateFeature);
+-		return false;
++	{
++		const bool allocated = impl->amdMode
++			? (impl->amdAllocParameters && NGXSucceeded(impl->amdAllocParameters(&impl->parameters)))
++			: ngxCore.AllocateParameters(&impl->parameters, "DLSSNR");
++		if (!allocated) {
++			impl->failure = impl->amdMode
++				? DlssNrApiFailure(DlssNrStage::CreateFeature, DlssNrCodeKind::Ngx, 0, "AllocateParameters(amdgx)")
++				: coreFailure(DlssNrStage::CreateFeature);
++			return false;
++		}
+ 	}
+ 	sehCode = 0;
+ 	if (!SetCreateParametersSafely(*impl, &sehCode)) {
+@@ -2237,6 +2290,9 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
+ 	for (size_t i = 1; i < passes.size(); ++i) {
+ 		auto child = std::make_unique<Impl>();
+ 		child->coreOwner = &ngxCore;
++		child->amdMode = impl->amdMode;
++		child->amdAllocParameters = impl->amdAllocParameters;
++		child->amdDestroyParameters = impl->amdDestroyParameters;
+ 		child->device11 = impl->device11;
+ 		child->device12 = impl->device12;
+ 		child->width = impl->width;
+@@ -2251,9 +2307,16 @@ bool DLSSNRFilter::InitializeChain(DeviceResources& resources, NgxD3D12Core& ngx
+ 			child->sharedOutput11, child->sharedOutput12)) return false;
+ 		if (impl->useResolutionScaling && i + 1 == passes.size() && FAILED(impl->device11->CreateShaderResourceView(
+ 			child->sharedOutput11.get(), nullptr, child->sharedOutputSrv11.put()))) return false;
+-		if (!ngxCore.AllocateParameters(&child->parameters, "DLSSNR")) {
+-			impl->failure = coreFailure(DlssNrStage::CreateFeature);
+-			return false;
++		{
++			const bool childAllocated = child->amdMode
++				? (child->amdAllocParameters && NGXSucceeded(child->amdAllocParameters(&child->parameters)))
++				: ngxCore.AllocateParameters(&child->parameters, "DLSSNR");
++			if (!childAllocated) {
++				impl->failure = child->amdMode
++					? DlssNrApiFailure(DlssNrStage::CreateFeature, DlssNrCodeKind::Ngx, 0, "AllocateParameters(amdgx), later pass")
++					: coreFailure(DlssNrStage::CreateFeature);
++				return false;
++			}
+ 		}
+ 		sehCode = 0;
+ 		if (!SetCreateParametersSafely(*child, &sehCode)) {
+diff --git a/src/Magpie.Core/NativeEffectBackendFactory.cpp b/src/Magpie.Core/NativeEffectBackendFactory.cpp
+index e42006b..4750acc 100644
+--- a/src/Magpie.Core/NativeEffectBackendFactory.cpp
++++ b/src/Magpie.Core/NativeEffectBackendFactory.cpp
+@@ -145,10 +145,9 @@ NativeEffectBackendResult CreateNativeEffectBackend(
+ 		input->GetDesc(&endpoint);
+ 		auto backend = std::make_unique<DLSSNRMultiPass>();
+ 		Logger::DiagnosticCapture diagnostic;
+-		DXGI_ADAPTER_DESC1 adapter{};
+-		const bool nonNvidia = resources.GetGraphicsAdapter() &&
+-			SUCCEEDED(resources.GetGraphicsAdapter()->GetDesc1(&adapter)) && adapter.VendorId != 0x10DE;
+-		const bool initialized = !nonNvidia && backend->Initialize(resources, ngxCore, input, output, option,
++		// 不再按厂商拒绝：DLSSNRFilter 自己按 VendorId 选 DLL
++		// （NVIDIA → nvngx_dlssnr.dll；其它 → amdgx_dlssnr.dll，且不碰 NGX core 会话）。
++		const bool initialized = backend->Initialize(resources, ngxCore, input, output, option,
+ 			hdrEnabled && endpoint.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+ 		const auto environment = DlssNrEnvironment(resources, input, output, diagnostic) + "\n" +
+ 			(backend->LibraryInfo().empty() ? "DLSSNR loaded module: not reached or unavailable" : backend->LibraryInfo());
+@@ -158,9 +157,7 @@ NativeEffectBackendResult CreateNativeEffectBackend(
+ 				return it == option.parameters.end() ? fallback : it->second;
+ 			}) > 1;
+ 			const bool stopped = multiPass || NgxRuntimeGuard::IsFaulted();
+-			const auto failure = nonNvidia
+-				? DlssNrFailure{ DlssNrStage::Initialize, DlssNrReason::UnsupportedAdapter, DlssNrCodeKind::None, 0, "Selected adapter is not NVIDIA" }
+-				: backend->GetDlssNrFailure();
++			const auto failure = backend->GetDlssNrFailure();
+ 			Logger::Get().Warn(fmt::format("DLSSNR STATUS: Feature=18 created=false fallback={}",
+ 				stopped ? "none-chain-stopped" : "pass-through"));
+ 			return { stopped, nullptr, stopped ? ScalingError::DlssNrStopped : ScalingError::DlssNrUnavailable,
