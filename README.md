@@ -241,6 +241,7 @@ src/nrtest/         运行时冒烟测试（nrtest）与帧成本基准（nrbenc
 src/opennr-patches/ 对 OpenNR 0.7.15 的补丁（含 D3D11↔D3D12 共享围栏）
 src/magpie-patches/ 对宿主 Magpie 6940f84 的补丁：FSR3Upscaler 多槽环形缓冲 + 输出晚一帧
 tools/              纸面模型（slot_model.py：单槽/多槽调度的离散事件仿真）
+src/nvngx-shim/      nvngx_dlssnr.dll 探针桩（P0：只打日志，用来核对 DLSSNR 槽位的 ABI）
 scripts/            一键构建、上游获取、打发布包、给宿主打补丁
 docs/               架构、构建、使用、排错、上游清单、实测数据、结论、桥接拆解（bridge.md）
 dist/               预编译产物（由本仓库源码构建，见 dist/README.md）
@@ -248,6 +249,7 @@ dist/               预编译产物（由本仓库源码构建，见 dist/README
 
 ## 文档
 
+- [docs/experiments-2026-11-03.md](docs/experiments-2026-11-03.md) — **三条实验线的推论、方法与实机顺序**（单槽拆解 / `amdgx_dlssnr.dll` / 抗闪烁，含三者的耦合）
 - [docs/roadmap.md](docs/roadmap.md) — 愿景拆成四条可验证目标、当前瓶颈、下一步
 - [docs/mochinr.md](docs/mochinr.md) — v0.4 的挂载契约、8 个踩坑、面板、路由器规则
 - [docs/architecture.md](docs/architecture.md) — 全链路、为什么 Home 会失效、同步与边界
