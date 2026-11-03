@@ -11,3 +11,7 @@
 *.addon64 binary
 *.addon32 binary
 *.zip binary
+
+# 补丁文本必须按 LF 检出：git apply 的上下文行若被换成 CRLF，就对不上宿主源码（LF）。
+# 只对宿主补丁目录强制，避免动到历史文件的换行。
+src/magpie-patches/*.patch text eol=lf
