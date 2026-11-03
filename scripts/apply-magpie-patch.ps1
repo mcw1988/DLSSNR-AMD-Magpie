@@ -140,16 +140,26 @@ try {
         for ($i = $stacked.Count - 1; $i -ge 0; $i--) {
             & $git -C $SourceDir apply -R $stacked[$i]
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "-R $(Split-Path $stacked[$i] -Leaf) 失败，请手工 git checkout -- ." -ForegroundColor Red
+                Write-Host "-R $(Split-Path $stacked[$i] -Leaf) 失败（原因见上），准备自动兜底" -ForegroundColor Red
             }
         }
         $left = @(& $git -C $SourceDir status --porcelain)
-        if ($left.Count -eq 0) {
-            Write-Host '已还原，宿主工作区干净' -ForegroundColor Green
-        } else {
-            Write-Host '宿主工作区仍有改动，请手工还原：' -ForegroundColor Red
-            $left | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+        if ($left.Count -gt 0) {
+            # -R 失败（外部漂移/换行/冲突）时兜底：脚本开头已强制工作区干净，所以这两条
+            # 路径上的改动全是本脚本打上去的，直接 checkout 回去是安全的。
+            # 补丁集当前只碰这两个文件；将来扩大范围要同步改这里。
+            Write-Host 'git apply -R 未能还原，改用 checkout 兜底' -ForegroundColor Yellow
+            & $git -C $SourceDir checkout -- src/Magpie.Core/FSR3Upscaler.cpp src/Magpie.Core/FSR3Upscaler.h
+            $left = @(& $git -C $SourceDir status --porcelain)
+            if ($left.Count -gt 0) {
+                Write-Host '兜底也失败，宿主工作区仍有改动：' -ForegroundColor Red
+                $left | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+                # throw → 非零退出；绝不能"改坏了仓库还报绿"
+                throw '还原失败，宿主工作区仍有改动（已尝试 checkout 兜底）'
+            }
         }
+        Write-Host '已还原，宿主工作区干净' -ForegroundColor Green
+        Write-Host ''
     }
 }
 if ($failure) { throw $failure }

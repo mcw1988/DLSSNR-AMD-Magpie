@@ -3,7 +3,7 @@
 上游仓库: https://github.com/SAOG0721/Magpie
 分支:     experimental
 基准提交: 6940f84 fix(release): keep worktree outputs in the workspace release directory
-改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+280/-64), src/Magpie.Core/FSR3Upscaler.h (+3)
+改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+314/-66), src/Magpie.Core/FSR3Upscaler.h (+3)
 依赖:     无（可单独应用）；0002 必须叠加在本补丁之上，不能反过来
 应用:     git -C <Magpie 源码目录> apply 0001-fsr3-slot-ring.patch
           （或 PowerShell: scripts/apply-magpie-patch.ps1 -Stage 1）
@@ -13,7 +13,7 @@
 不要直接 apply 到新提交上（也不会成功）。
 
 diff --git a/src/Magpie.Core/FSR3Upscaler.cpp b/src/Magpie.Core/FSR3Upscaler.cpp
-index b5d3677..35a75af 100644
+index b5d3677..83be654 100644
 --- a/src/Magpie.Core/FSR3Upscaler.cpp
 +++ b/src/Magpie.Core/FSR3Upscaler.cpp
 @@ -11,21 +11,65 @@
@@ -98,7 +98,7 @@ index b5d3677..35a75af 100644
  	uint32_t inputWidth = 0;
  	uint32_t inputHeight = 0;
  	uint32_t outputWidth = 0;
-@@ -56,17 +99,42 @@ struct FSR3Upscaler::Impl {
+@@ -56,17 +99,57 @@ struct FSR3Upscaler::Impl {
  	bool useFsr4 = false;
  	bool resetHistory = true;
  	FrameGuidanceFrameId lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
@@ -120,6 +120,21 @@ index b5d3677..35a75af 100644
  };
  
 -static bool WaitForFence(FSR3Upscaler::Impl& impl, uint64_t value) noexcept {
++// 只有设备真的没了才值得 poison。上游 `dispatch` 失败只 `return false`，宿主的既有设计就是
++// "这一帧退化（marker pass 顶上）→ 下一帧照常再调 Draw"（`Renderer.cpp:4166-4174`、`:4122-4132`），
++// backend 不销毁不重建。在这里整体 poison 会让 NR 一直退化到下次 Resize/改设置，而且宿主会**逐帧**
++// 打 `Native effect Draw failed`（120 fps 下 120 行/秒），把首因埋在噪声里。
++static bool IsDeviceLost(FSR3Upscaler::Impl& impl) noexcept {
++	return impl.device12 && impl.device12->GetDeviceRemovedReason() != S_OK;
++}
++
++// 失败日志统一一行带 HRESULT 与设备移除原因（对齐 `mochinr.cpp` 的 `Fail()`，避免刷两行）。
++static void LogStageFailure(const char* stage, HRESULT hr, FSR3Upscaler::Impl& impl) noexcept {
++	const HRESULT removed = impl.device12 ? impl.device12->GetDeviceRemovedReason() : S_OK;
++	Logger::Get().Error(fmt::format("{} failed: hr=0x{:08X} removedReason=0x{:08X}",
++		stage, (uint32_t)hr, (uint32_t)removed));
++}
++
 +// 默认无限等待：`WaitForQueue`（`~Impl` 与 `Drain`）走默认参数，收尾必须等完——
 +// 上游析构同样只 `WaitForQueue`。只有 Draw 里的按槽认领传 4000 ms 上界（§4 F13）：
 +// 围栏若永不完成，那里必须报错返回并把对象 poison，而不是把整条后端线程卡死。
@@ -144,7 +159,7 @@ index b5d3677..35a75af 100644
  }
  
  static bool WaitForQueue(FSR3Upscaler::Impl& impl) noexcept {
-@@ -213,6 +281,41 @@ static bool CreateSharedTexture(
+@@ -213,6 +296,41 @@ static bool CreateSharedTexture(
  	return true;
  }
  
@@ -186,7 +201,7 @@ index b5d3677..35a75af 100644
  static bool CreateAuxTexture(
  	FSR3Upscaler::Impl& impl,
  	DXGI_FORMAT format,
-@@ -246,7 +349,8 @@ static bool CreateAuxTexture(
+@@ -246,7 +364,8 @@ static bool CreateAuxTexture(
  	uav.Format = format;
  	uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
  	impl.device12->CreateUnorderedAccessView(resource.get(), nullptr, &uav, cpuHandle);
@@ -196,7 +211,7 @@ index b5d3677..35a75af 100644
  		gpuHandle, cpuHandle, resource.get(), clearValue, 0, nullptr);
  	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
  	barrier.Transition.pResource = resource.get();
-@@ -306,30 +410,25 @@ bool FSR3Upscaler::Initialize(
+@@ -306,30 +425,25 @@ bool FSR3Upscaler::Initialize(
  	D3D12_COMMAND_QUEUE_DESC queueDesc{};
  	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
  	hr = impl->device12->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(impl->queue12.put()));
@@ -241,7 +256,7 @@ index b5d3677..35a75af 100644
  
  	D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
  	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-@@ -338,7 +437,7 @@ bool FSR3Upscaler::Initialize(
+@@ -338,7 +452,7 @@ bool FSR3Upscaler::Initialize(
  	hr = impl->device12->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(impl->descriptorHeap12.put()));
  	if (FAILED(hr)) return false;
  	ID3D12DescriptorHeap* heaps[]{ impl->descriptorHeap12.get() };
@@ -250,7 +265,7 @@ index b5d3677..35a75af 100644
  	const UINT stride = impl->device12->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
  	D3D12_CPU_DESCRIPTOR_HANDLE cpu = impl->descriptorHeap12->GetCPUDescriptorHandleForHeapStart();
  	D3D12_GPU_DESCRIPTOR_HANDLE gpu = impl->descriptorHeap12->GetGPUDescriptorHandleForHeapStart();
-@@ -370,10 +469,10 @@ bool FSR3Upscaler::Initialize(
+@@ -370,10 +484,10 @@ bool FSR3Upscaler::Initialize(
  	}
  	if (!enableOpticalFlow && !addAux(DXGI_FORMAT_R16G16_FLOAT, inputDesc.Width, inputDesc.Height,
  		impl->zeroMotion12, zero)) return false;
@@ -264,7 +279,7 @@ index b5d3677..35a75af 100644
  	impl->queue12->ExecuteCommandLists(1, lists);
  
  	hr = impl->device11->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(impl->fence11.put()));
-@@ -385,6 +484,12 @@ bool FSR3Upscaler::Initialize(
+@@ -385,6 +499,12 @@ bool FSR3Upscaler::Initialize(
  	hr = impl->device12->OpenSharedHandle(fenceHandle.get(), IID_PPV_ARGS(impl->fence12.put()));
  	if (FAILED(hr) || !WaitForQueue(*impl)) return false;
  
@@ -277,7 +292,7 @@ index b5d3677..35a75af 100644
  	if (useFsr4) {
  		impl->providerModule = LoadLibraryW(L"amd_fidelityfx_upscaler_dx12.dll");
  		if (!impl->providerModule) {
-@@ -486,60 +591,124 @@ bool FSR3Upscaler::Resize(DeviceResources& resources, ID3D11Texture2D* input,
+@@ -486,60 +606,127 @@ bool FSR3Upscaler::Resize(DeviceResources& resources, ID3D11Texture2D* input,
  	return Initialize(resources, input, output, _motionRequest, _useFsr4);
  }
  
@@ -343,11 +358,14 @@ index b5d3677..35a75af 100644
  		const auto sync = drawContext.frameGuidance.motion.metadata.sync;
 -		if (sync.fence && sync.value && FAILED(impl.context11->Wait(sync.fence, sync.value))) return false;
 -		impl.context11->CopyResource(impl.sharedMotion11.get(), drawContext.frameGuidance.motion.texture);
-+		if (sync.fence && sync.value && FAILED(impl.context11->Wait(sync.fence, sync.value))) {
-+			impl.failed = true;
-+			++impl.framesDropped;
-+			Logger::Get().Error("Wait FSR3 motion vector fence failed");
-+			return false;
++		if (sync.fence && sync.value) {
++			const HRESULT motionHr = impl.context11->Wait(sync.fence, sync.value);
++			if (FAILED(motionHr)) {
++				++impl.framesDropped;
++				LogStageFailure("Wait FSR3 motion vector fence", motionHr, impl);
++				if (IsDeviceLost(impl)) impl.failed = true;
++				return false;
++			}
 +		}
 +		impl.context11->CopyResource(slot.motion11.get(), drawContext.frameGuidance.motion.texture);
  	}
@@ -355,18 +373,18 @@ index b5d3677..35a75af 100644
  	HRESULT hr = impl.context11->Signal(impl.fence11.get(), inputReady);
 -	if (FAILED(hr)) return false;
 +	if (FAILED(hr)) {
-+		impl.failed = true;
 +		++impl.framesDropped;
-+		Logger::Get().ComError("Signal FSR3 input ready fence failed", hr);
++		LogStageFailure("Signal FSR3 input ready fence", hr, impl);
++		if (IsDeviceLost(impl)) impl.failed = true;
 +		return false;
 +	}
  	impl.context11->Flush();
  	hr = impl.queue12->Wait(impl.fence12.get(), inputReady);
 -	if (FAILED(hr)) return false;
 +	if (FAILED(hr)) {
-+		impl.failed = true;
 +		++impl.framesDropped;
-+		Logger::Get().ComError("Queue wait for FSR3 input ready failed", hr);
++		LogStageFailure("Queue wait for FSR3 input ready", hr, impl);
++		if (IsDeviceLost(impl)) impl.failed = true;
 +		return false;
 +	}
  
@@ -376,9 +394,9 @@ index b5d3677..35a75af 100644
 +	hr = slot.allocator12->Reset();
 +	if (SUCCEEDED(hr)) hr = slot.commandList12->Reset(slot.allocator12.get(), nullptr);
 +	if (FAILED(hr)) {
-+		impl.failed = true;
 +		++impl.framesDropped;
-+		Logger::Get().ComError("Reset FSR3 D3D12 command list failed", hr);
++		LogStageFailure("Reset FSR3 D3D12 command list", hr, impl);
++		if (IsDeviceLost(impl)) impl.failed = true;
 +		return false;
 +	}
  	D3D12_RESOURCE_BARRIER barriers[3]{};
@@ -420,16 +438,23 @@ index b5d3677..35a75af 100644
  	desc.jitterOffset = { 0.0f, 0.0f };
  	desc.motionVectorScale = { 1.0f, 1.0f };
  	desc.renderSize = { impl.inputWidth, impl.inputHeight };
-@@ -559,6 +728,8 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -559,26 +746,83 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	}
  	const ffxReturnCode_t rc = impl.dispatch(&impl.context, &desc.header);
  	if (rc != FFX_API_RETURN_OK) {
-+		impl.failed = true;
+-		Logger::Get().Error(fmt::format("Dispatch {} failed ({})",
+-			impl.useFsr4 ? "FSR 4.1.1" : "FSR 3.1.5", (uint32_t)rc));
++		// list 停在 recording 状态、从未 Close；必须关掉（丢弃、不提交），否则下一帧的
++		// allocator12->Reset() 会撞"D3D12 不允许 reset 仍打开的命令列表的 allocator"。
++		// 之后的 Reset 只有在上一次提交也已完成时才安全——那由认领槽时的按槽等待保证。
++		(void)slot.commandList12->Close();
 +		++impl.framesDropped;
- 		Logger::Get().Error(fmt::format("Dispatch {} failed ({})",
- 			impl.useFsr4 ? "FSR 4.1.1" : "FSR 3.1.5", (uint32_t)rc));
++		const HRESULT removed = impl.device12 ? impl.device12->GetDeviceRemovedReason() : S_OK;
++		Logger::Get().Error(fmt::format("Dispatch {} failed ({}) removedReason=0x{:08X}",
++			impl.useFsr4 ? "FSR 4.1.1" : "FSR 3.1.5", (uint32_t)rc, (uint32_t)removed));
++		if (IsDeviceLost(impl)) impl.failed = true;
  		return false;
-@@ -566,19 +737,60 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+ 	}
  	for (UINT i = 0; i < barrierCount; ++i) {
  		std::swap(barriers[i].Transition.StateBefore, barriers[i].Transition.StateAfter);
  	}
@@ -440,9 +465,11 @@ index b5d3677..35a75af 100644
 +	slot.commandList12->ResourceBarrier(barrierCount, barriers);
 +	hr = slot.commandList12->Close();
 +	if (FAILED(hr)) {
-+		impl.failed = true;
++		// 已经 Close 过一次失败了，这里不再重复 Close；list 的状态由驱动保证，
++		// allocator 的复用安全仍由认领槽时的按槽等待保证。
 +		++impl.framesDropped;
-+		Logger::Get().ComError("Close FSR3 D3D12 command list failed", hr);
++		LogStageFailure("Close FSR3 D3D12 command list", hr, impl);
++		if (IsDeviceLost(impl)) impl.failed = true;
 +		return false;
 +	}
 +	ID3D12CommandList* lists[]{ slot.commandList12.get() };
@@ -455,13 +482,19 @@ index b5d3677..35a75af 100644
 -	impl.context11->CopyResource(output, impl.sharedOutput11.get());
 +	const uint64_t islandValue = ++impl.fenceValue;
 +	hr = impl.queue12->Signal(impl.fence12.get(), islandValue);
-+	slot.islandValue = islandValue;
 +	if (FAILED(hr)) {
-+		impl.failed = true;
++		// islandValue 没能入队，就不能记到槽上——否则下一次认领该槽会等一个永不完成的围栏
++		// （4000 ms 超时 → poison，等于把一次可恢复失败放大成整个会话失效）。
++		// 岛已经提交出去了，用一次全排空把围栏值与槽重新对齐：排空后 fence12 到了更大的值，
++		// 槽上残留的旧 islandValue 落在"已完成值以下"，任何等待都会立即放行，allocator 也
++		// 一定可以安全复用。代价只在这一帧付一次。
 +		++impl.framesDropped;
-+		Logger::Get().ComError("Signal FSR3 island fence failed", hr);
++		LogStageFailure("Signal FSR3 island fence", hr, impl);
++		if (!WaitForQueue(impl)) impl.failed = true;
 +		return false;
 +	}
++	// Signal 成功了才算"这个槽有岛"——`slot.islandValue` 是槽状态的唯一权威记账点。
++	slot.islandValue = islandValue;
 +
 +	// islandValueLag：提交瞬间"已提交的围栏值"与"已完成的围栏值"之差（单位是围栏值，
 +	// 每个岛占 2）。稳态下应稳定在 2*(slots-1) 以内，突然长大说明岛变慢了。
@@ -473,9 +506,10 @@ index b5d3677..35a75af 100644
 +	// 本帧就要结果，与上游一致：串行点 2（D3D11 GPU 侧等待）保留。
 +	hr = impl.context11->Wait(impl.fence11.get(), islandValue);
 +	if (FAILED(hr)) {
-+		impl.failed = true;
 +		++impl.framesDropped;
-+		Logger::Get().ComError("Wait FSR3 island fence on the D3D11 queue failed", hr);
++		LogStageFailure("Wait FSR3 island fence on the D3D11 queue", hr, impl);
++		// 拷出没排上队：岛已 signal，排空一次确保这个槽的 allocator 可以安全复用。
++		if (!WaitForQueue(impl)) impl.failed = true;
 +		return false;
 +	}
 +	impl.context11->CopyResource(output, slot.output11.get());
@@ -500,7 +534,7 @@ index b5d3677..35a75af 100644
  	return true;
  }
  
-@@ -596,6 +808,7 @@ bool FSR3Upscaler::Initialize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2
+@@ -596,6 +840,7 @@ bool FSR3Upscaler::Initialize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2
  }
  bool FSR3Upscaler::Resize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2D*) noexcept { return false; }
  bool FSR3Upscaler::Draw(const NativeEffectDrawContext&) noexcept { return false; }
