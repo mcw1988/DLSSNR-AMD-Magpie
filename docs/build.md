@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build-all.ps1
 |---|---|---|
 | `overlay-input.addon64` | `src/overlay-input/overlay_input.cpp` | 需 ReShade 头文件（`scripts/fetch-upstream.ps1` 会拉） |
 | `nr-router.exe` | `src/nr-router/nr_router.cpp` | 纯 Win32，无第三方依赖 |
-| `nrtest.exe` | `src/nrtest/main.cpp` | 需 `src/nrtest/LmxxfNrApi.h` |
+| `nrtest.exe` | `src/nrtest/main.cpp` | 需 `src/nrtest/MochiNrApi.h` |
 | `nrbench.exe` | `src/nrtest/nrbench.cpp` | 同上；跑 N 帧并拆开计时 |
 | `mochinr.addon64` | `src/mochinr/mochinr.cpp` | v0.4 主力；需 MinHook 与 ReShade 6.8 头文件（`src/mochinr/build.ps1` 自动找 `upstream\`，也可 `-MinHookDir` / `-ReshadeIncludeDir` 指定；`-OutFile` 可直接输出到部署目录） |
 | `amd-nr.addon64` | 上游 OpenNR 源码 + `src/opennr-patches/` | 由 `build-all.ps1` 调上游自带的 `build.ps1 -Target neural`（v0.4 起不随发布包分发） |

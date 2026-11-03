@@ -75,7 +75,7 @@ ReShade 只在进程启动时加载 add-on，所以：
   - **调试**：显示视图（正常/代理/纯网络/差分/着色）、保存
 - **Ctrl+Home**：重新读 `mochinr.ini`（面板外手改参数后用这个，不必重启）。
 - 覆盖层打开期间 `overlay-input` 会吞掉原始键鼠，游戏不会同时响应；再按 Home 或 Esc 关闭。
-- 参数不走 `LmxxfNrFrameInfo`：`MochizukiNrControls.renodx=1` 时由 `reno_*` 字段接管，
+- 参数不走 `MochiNrFrameInfo`：`MochizukiNrControls.renodx=1` 时由 `reno_*` 字段接管，
   必须经 `MochizukiNrSetControls` 下发——否则「面板除了开关全都无效」。
 
 ## 5. 参数落在哪

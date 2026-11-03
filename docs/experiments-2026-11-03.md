@@ -241,9 +241,9 @@ O  = X0 + H             // 输出
 
 | 已有 | 缺 |
 |---|---|
-| `base = job.res[kColor]` 与 `raw = privateOutput` 都在手边、同尺寸 | `mochinr.cpp:701-721` 构造 `LmxxfNrFrameInfo` 时**没给** `fi.motion/depth/smooth_*` 赋值 |
+| `base = job.res[kColor]` 与 `raw = privateOutput` 都在手边、同尺寸 | `mochinr.cpp:701-721` 构造 `MochiNrFrameInfo` 时**没给** `fi.motion/depth/smooth_*` 赋值 |
 | 插入点明确：`mochinr.cpp:838` `RecordOutputs` 之后、`:845-856` 重放 FSR4 之前 | 未设 `TEMPORAL / SMOOTH_RESIDUAL`；`history_strength` 未在 `SendControls` 下发 |
-| 运行时支持时域（`LmxxfNrApi.h:132-153/:76-78`） | 本项目内**没有**任何时域历史/残差/抗闪烁代码 |
+| 运行时支持时域（`MochiNrApi.h:132-153/:76-78`） | 本项目内**没有**任何时域历史/残差/抗闪烁代码 |
 | 宿主队列、allocator 环、fence、延迟释放齐备 | `kMotion/kDepth` 从未验证格式/尺寸/非零比例 |
 
 ## 3.5 实验方法（按性价比，不按论文完整度）

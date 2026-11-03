@@ -1,6 +1,6 @@
 #pragma once
 
-/* MochizukiNrRuntime.dll's own C exports, beside LmxxfNrGetApi (LmxxfNrApi.h, which this header leaves untouched, so
+/* MochizukiNrRuntime.dll's own C exports, beside MochiNrGetApi (MochiNrApi.h, which this header leaves untouched, so
  * the lmxxf runtime and hosts that know only that ABI are unaffected). A host resolves each export with
  * GetProcAddress; a missing one means an older runtime.
  *
@@ -13,7 +13,7 @@
  * sizeof: tail padding (MochizukiNrInfo has 4 bytes after network_dispatches) is where the next field goes, so a
  * newer host must not take it for a field an older runtime wrote.
  *
- * LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK, for this runtime: when the network fails on a frame, the frame's
+ * MOCHI_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK, for this runtime: when the network fails on a frame, the frame's
  * original colour is passed through to Super Resolution; the output is never zeros. */
 
 #include <stdint.h>
@@ -42,7 +42,7 @@ extern "C"
 
     /* The model's controls. Every value is sanitised by the runtime: NaN or infinity becomes the default, anything
      * else is clamped to the range given. Detail strength, colour strength, model scale and passes come with each
-     * frame in LmxxfNrFrameInfo. */
+     * frame in MochiNrFrameInfo. */
     typedef struct MochizukiNrControls
     {
         uint32_t struct_size;
@@ -78,7 +78,7 @@ extern "C"
         uint32_t preprocess_curve;    /* 0 none, 1 neutral, 2 reinhard, 3 filmic (default), 4 gt, 5 aces, 6 agx */
         float preprocess_contrast;    /* about mid grey, 0.5..2, default 1 */
         float preprocess_saturation;  /* 0.05..2, default 1 */
-        /* With LMXXF_NR_FRAME_FLAG_ANTI_HALO: how far past the first pass's local range a pixel may go, as a
+        /* With MOCHI_NR_FRAME_FLAG_ANTI_HALO: how far past the first pass's local range a pixel may go, as a
          * fraction of it: 0..0.5, default 0.05 (also for a host whose struct ends before it). */
         float anti_halo_margin;
         /* Below 100% model scale, how the model's result is enlarged to the frame: 0 matched residual (default),
@@ -208,7 +208,7 @@ extern "C"
         /* The fields end at byte 348 (struct_size as the runtime fills it); sizeof has 4 bytes of tail padding. */
     } MochizukiNrInfo;
 
-    /* All but GetFeatures return an LmxxfNrStatus. SetControls takes effect on the next PrepareFrame; call it on the
+    /* All but GetFeatures return an MochiNrStatus. SetControls takes effect on the next PrepareFrame; call it on the
      * thread that calls PrepareFrame. It never fails the session. */
     typedef int32_t (*PFN_MochizukiNrSetControls)(void* context, const MochizukiNrControls* controls);
     typedef int32_t (*PFN_MochizukiNrGetInfo)(void* context, MochizukiNrInfo* info);

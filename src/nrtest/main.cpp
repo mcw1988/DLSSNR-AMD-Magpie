@@ -1,6 +1,6 @@
 // Standalone smoke test for MochizukiNrRuntime.dll.
 //
-// Creates its own D3D12 device/queue, runs one frame through the Lmxxf API v1
+// Creates its own D3D12 device/queue, runs one frame through the Mochi API v1
 // (QueryCapabilities -> Create -> PrepareSession -> PrepareFrame -> RecordInputs ->
 // EnqueueHip -> RecordOutputs -> Poll -> Retire), and reports what came back.
 // Usage: nrtest.exe [assets_dir]
@@ -14,12 +14,12 @@
 #include <string>
 #include <vector>
 
-#include "LmxxfNrApi.h"
+#include "MochiNrApi.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 
-static void Step(const char* what, int32_t rc, const LmxxfNrApi& api)
+static void Step(const char* what, int32_t rc, const MochiNrApi& api)
 {
     char err[512]{};
     if (api.GetLastError)
@@ -168,36 +168,36 @@ int main(int argc, char** argv)
         std::printf("LoadLibraryEx(%ls) failed: %lu\n", dll.c_str(), GetLastError());
         return 1;
     }
-    auto getApi = reinterpret_cast<int32_t (*)(uint32_t, LmxxfNrApi*)>(GetProcAddress(mod, "LmxxfNrGetApi"));
+    auto getApi = reinterpret_cast<int32_t (*)(uint32_t, MochiNrApi*)>(GetProcAddress(mod, "LmxxfNrGetApi") /* 历史导出名 */);
     if (getApi == nullptr) {
-        std::printf("LmxxfNrGetApi missing\n");
+        std::printf("MochiNrGetApi missing\n");
         return 1;
     }
-    LmxxfNrApi api{};
+    MochiNrApi api{};
     api.struct_size = sizeof api;
-    int32_t rc = getApi(LMXXF_NR_ABI_VERSION, &api);
-    std::printf("LmxxfNrGetApi -> %d, struct_size %u, abi %u\n", rc, api.struct_size, api.abi_version);
-    if (rc != LMXXF_NR_OK) {
+    int32_t rc = getApi(MOCHI_NR_ABI_VERSION, &api);
+    std::printf("MochiNrGetApi -> %d, struct_size %u, abi %u\n", rc, api.struct_size, api.abi_version);
+    if (rc != MOCHI_NR_OK) {
         return 1;
     }
 
-    LmxxfNrCapabilities caps{};
+    MochiNrCapabilities caps{};
     caps.struct_size = sizeof caps;
     Step("QueryCapabilities", api.QueryCapabilities(&caps), api);
     std::printf("  max %ux%u history %u graph %u hip %u gfx1201 %u\n", caps.max_input_width,
                 caps.max_input_height, caps.history_supported, caps.graph_supported, caps.hip_ready,
                 caps.gfx1201_target);
 
-    LmxxfNrCreateInfo ci{};
+    MochiNrCreateInfo ci{};
     ci.struct_size = sizeof ci;
     ci.device = device;
     ci.queue = queue;
     ci.assets_directory = assets_w.c_str();
-    ci.flags = LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK;
+    ci.flags = MOCHI_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK;
     void* session = nullptr;
     rc = api.Create(&ci, &session);
     Step("Create", rc, api);
-    if (rc != LMXXF_NR_OK) {
+    if (rc != MOCHI_NR_OK) {
         return 1;
     }
 
@@ -207,7 +207,7 @@ int main(int argc, char** argv)
     rc = api.PrepareSession(session);
     Step("PrepareSession", rc, api);
 
-    LmxxfNrFrameInfo fi{};
+    MochiNrFrameInfo fi{};
     fi.struct_size = sizeof fi;
     fi.frame_id = 1;
     fi.command_list = list;
@@ -222,14 +222,14 @@ int main(int argc, char** argv)
     fi.passes = 1;
     fi.reset = 1;
 
-    LmxxfNrJob job{};
+    MochiNrJob job{};
     job.struct_size = sizeof job;
     // The first frame refuses while the network compiles: keep asking, as the add-on does.
     const ULONGLONG t0 = GetTickCount64();
     for (;;) {
         job.struct_size = sizeof job;
         rc = api.PrepareFrame(session, &fi, &job);
-        if (rc == LMXXF_NR_OK)
+        if (rc == MOCHI_NR_OK)
             break;
         char st[512]{};
         if (api.GetStatus)
@@ -237,7 +237,7 @@ int main(int argc, char** argv)
         std::printf("  [%llus] PrepareFrame rc=%d  status: %s\n",
                     (GetTickCount64() - t0) / 1000, rc, st);
         std::fflush(stdout);
-        if (GetTickCount64() - t0 > 900000 || (rc != LMXXF_NR_UNAVAILABLE && rc != LMXXF_NR_FAILED)) {
+        if (GetTickCount64() - t0 > 900000 || (rc != MOCHI_NR_UNAVAILABLE && rc != MOCHI_NR_FAILED)) {
             char err[512]{};
             if (api.GetLastError)
                 api.GetLastError(err, sizeof err);
@@ -265,11 +265,11 @@ int main(int argc, char** argv)
     uint32_t jobState = 0;
     for (int i = 0; i < 600; ++i) {
         rc = api.Poll(session, job.handle, &jobState);
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             Step("Poll", rc, api);
             break;
         }
-        if (jobState >= LMXXF_NR_JOB_NR_COMPLETE)
+        if (jobState >= MOCHI_NR_JOB_NR_COMPLETE)
             break;
         Sleep(500);
     }

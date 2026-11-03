@@ -58,7 +58,7 @@ ReShade Home 页签下的 **mochinr 降噪** 面板（中文，四页签）：
 - **计时**：会话状态、分辨率、已合成/跳过帧、CPU 每帧四项分解、在飞帧数、队列深度
 - **调试**：显示视图（正常/代理/纯网络/差分/着色）、保存
 
-> 参数不走 `LmxxfNrFrameInfo`：`MochizukiNrControls.renodx` 默认为 1（RenoDX 阶段），
+> 参数不走 `MochiNrFrameInfo`：`MochizukiNrControls.renodx` 默认为 1（RenoDX 阶段），
 > 该阶段**不使用** frame info 里的层数/渲染率/强度，改由 `reno_*` 字段接管，
 > 必须经 `MochizukiNrSetControls` 下发。这是「面板除了开关全都无效」的真正原因。
 

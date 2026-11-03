@@ -16,7 +16,7 @@
 #include <string>
 #include <vector>
 
-#include "LmxxfNrApi.h"
+#include "MochiNrApi.h"
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -31,7 +31,7 @@ static double NowMs()
     return static_cast<double>(c.QuadPart) * 1000.0 / static_cast<double>(freq.QuadPart);
 }
 
-static void Step(const char* what, int32_t rc, const LmxxfNrApi& api)
+static void Step(const char* what, int32_t rc, const MochiNrApi& api)
 {
     char err[512]{};
     if (api.GetLastError)
@@ -181,29 +181,29 @@ int wmain(int argc, wchar_t** argv)
         std::printf("LoadLibraryEx failed: %lu\n", GetLastError());
         return 1;
     }
-    auto getApi = reinterpret_cast<int32_t (*)(uint32_t, LmxxfNrApi*)>(GetProcAddress(mod, "LmxxfNrGetApi"));
+    auto getApi = reinterpret_cast<int32_t (*)(uint32_t, MochiNrApi*)>(GetProcAddress(mod, "LmxxfNrGetApi") /* 历史导出名 */);
     if (getApi == nullptr) {
-        std::printf("LmxxfNrGetApi missing\n");
+        std::printf("MochiNrGetApi missing\n");
         return 1;
     }
-    LmxxfNrApi api{};
+    MochiNrApi api{};
     api.struct_size = sizeof api;
-    int32_t rc = getApi(LMXXF_NR_ABI_VERSION, &api);
-    if (rc != LMXXF_NR_OK)
+    int32_t rc = getApi(MOCHI_NR_ABI_VERSION, &api);
+    if (rc != MOCHI_NR_OK)
         return 1;
 
-    LmxxfNrCreateInfo ci{};
+    MochiNrCreateInfo ci{};
     ci.struct_size = sizeof ci;
     ci.device = device;
     ci.queue = queue;
     ci.assets_directory = assets_w.c_str();
-    ci.flags = LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK;
+    ci.flags = MOCHI_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK;
     if (use_aco)
-        ci.flags |= LMXXF_NR_CREATE_FLAG_ACO;
+        ci.flags |= MOCHI_NR_CREATE_FLAG_ACO;
     void* session = nullptr;
     rc = api.Create(&ci, &session);
     Step("Create", rc, api);
-    if (rc != LMXXF_NR_OK)
+    if (rc != MOCHI_NR_OK)
         return 1;
     rc = api.PrepareSession(session);
     Step("PrepareSession", rc, api);
@@ -217,7 +217,7 @@ int wmain(int argc, wchar_t** argv)
 
     for (int f = 0; f < frames; ++f) {
         const double t0 = NowMs();
-        LmxxfNrFrameInfo fi{};
+        MochiNrFrameInfo fi{};
         fi.struct_size = sizeof fi;
         fi.frame_id = static_cast<uint64_t>(f) + 1;
         fi.command_list = list;
@@ -232,17 +232,17 @@ int wmain(int argc, wchar_t** argv)
         fi.passes = 1;
         fi.reset = f == 0 ? 1u : 0u;
 
-        LmxxfNrJob job{};
+        MochiNrJob job{};
         job.struct_size = sizeof job;
         const double a0 = NowMs();
         for (int attempt = 0; attempt < 600; ++attempt) {
             rc = api.PrepareFrame(session, &fi, &job);
-            if (rc == LMXXF_NR_OK)
+            if (rc == MOCHI_NR_OK)
                 break;
             Sleep(100);
         }
         const double a1 = NowMs();
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             Step("PrepareFrame", rc, api);
             return 1;
         }
@@ -250,7 +250,7 @@ int wmain(int argc, wchar_t** argv)
         alloc->Reset();
         list->Reset(alloc, nullptr);
         rc = api.RecordInputs(session, job.handle, list);
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             Step("RecordInputs", rc, api);
             return 1;
         }
@@ -260,14 +260,14 @@ int wmain(int argc, wchar_t** argv)
         const double b1 = NowMs();
 
         rc = api.EnqueueHip(session, job.handle, queue);
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             Step("EnqueueHip", rc, api);
             return 1;
         }
         uint32_t jobState = 0;
         for (int i = 0; i < 600000; ++i) {
             rc = api.Poll(session, job.handle, &jobState);
-            if (rc != LMXXF_NR_OK || jobState >= LMXXF_NR_JOB_NR_COMPLETE)
+            if (rc != MOCHI_NR_OK || jobState >= MOCHI_NR_JOB_NR_COMPLETE)
                 break;
             Sleep(0);
         }
@@ -276,7 +276,7 @@ int wmain(int argc, wchar_t** argv)
         alloc->Reset();
         list->Reset(alloc, nullptr);
         rc = api.RecordOutputs(session, job.handle, list);
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             Step("RecordOutputs", rc, api);
             return 1;
         }
@@ -286,7 +286,7 @@ int wmain(int argc, wchar_t** argv)
         const double d1 = NowMs();
 
         rc = api.Retire(session, job.handle);
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             Step("Retire", rc, api);
             return 1;
         }

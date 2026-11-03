@@ -84,7 +84,7 @@ dlssnr-amd\
 
 - 源码：<https://github.com/zmodelerlover/OpenNR-ReShade>（原 `dlss5-neural-amd`，GitHub 会自动跳转）
   → `build.ps1 -Target neural`，产物 `build\amd-nr.addon64`。该工程自带 `3rdparty\reshade`、
-  `3rdparty\minhook`、`3rdparty\mochizuki\LmxxfNrApi.h`。
+  `3rdparty\minhook`、`3rdparty\mochizuki\MochiNrApi.h`。
 - 本项目对它的改动在 `src/opennr-patches/opennr-0.7.15-magpie-nr.patch`（含 D3D11↔D3D12 共享围栏）。
 - 也提供预编译版本：HF 数据集同仓库的 `addon/<版本>/amd-nr.addon64`。
 

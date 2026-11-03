@@ -173,7 +173,7 @@ mochizuki  3.4     (网络, ACO)   + ≈1.9 (D3D11→D3D12→Vulkan)    = 5.3 ->
 | `mochinr` | `mochinr.addon64` | v0.4 主力。拦截 `ffxDispatch`（放大之前），把批次在 `ExecuteCommandLists` 处劈成两段，网络跑完再重放；自带中文四页签面板（网络 / 风味 / 计时 / 调试） |
 | `overlay-input` | `overlay-input.addon64` | ReShade add-on。`WH_KEYBOARD_LL` / `WH_MOUSE_LL` + 15 ms 轮询，把按键、鼠标位置、按键状态、滚轮转发进 `swapchain->get_hwnd()`；热键（默认 Home）切换；覆盖期间吞掉原始输入 |
 | `nr-router` | `nr-router.exe` | 读 `config\v4e\config.json`（0.6.11）或 `config\config.json`（旧版）的 `profiles[0].scalingMode`，按组名/效果名判定后端，只留一个 add-on；`--watch` 常驻、`--restart` 自动重启 Magpie |
-| `nrtest` | `nrtest.exe` | 独立 D3D12 宿主，直接按 `LmxxfNrApi`（ABI v1）跑一帧并打印结果 |
+| `nrtest` | `nrtest.exe` | 独立 D3D12 宿主，直接按 `MochiNrApi`（ABI v1）跑一帧并打印结果 |
 | `nrbench` | `nrbench.exe` | 同上，但跑 N 帧并分别统计 prepare / 生产拷贝 / 网络 / 消费拷贝的墙钟耗时 |
 
 上游 OpenNR add-on 仍以 `dist/amd-nr.addon64` 形式保留（配合 `src/opennr-patches/` 的补丁），

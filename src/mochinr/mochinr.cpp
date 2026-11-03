@@ -36,8 +36,8 @@
 
 #include <MinHook.h>
 
-#include "../nrtest/LmxxfNrApi.h"
-#include "MochizukiNrControls.h"   // the runtime's own exports beside LmxxfNrGetApi
+#include "../nrtest/MochiNrApi.h"
+#include "MochizukiNrControls.h"   // the runtime's own exports beside MochiNrGetApi
 
 using namespace reshade::api;
 
@@ -104,7 +104,7 @@ struct Settings
 
     // Softening the runtime already has but the panel used to leave at its defaults.
     // Anti-halo holds every pixel inside the range the first pass's answer has around it
-    // (LMXXF_NR_FRAME_FLAG_ANTI_HALO + anti_halo_margin); it needs two or more passes.
+    // (MOCHI_NR_FRAME_FLAG_ANTI_HALO + anti_halo_margin); it needs two or more passes.
     int antiHalo = 0;
     float antiHaloMargin = 0.05f;
     // Preprocess: change the picture the network is shown and take every change back out of its
@@ -482,7 +482,7 @@ ID3D12Device *g_devRef = nullptr;           // that queue's device (what the run
 struct Nr
 {
     HMODULE module = nullptr;
-    LmxxfNrApi api{};
+    MochiNrApi api{};
     void *session = nullptr;
     volatile long state = 0;   // 0 idle, 1 creating, 2 ready, 3 failed
     uint64_t frame = 0, ran = 0, skipped = 0;
@@ -506,10 +506,10 @@ void InitSession(std::wstring dir)
     g_nr.module = LoadLibraryExW((dir + L"\\MochizukiNrRuntime.dll").c_str(), nullptr,
                                  LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
     if (g_nr.module == nullptr) { Log("nr: LoadLibrary err=%lu", GetLastError()); g_nr.state = 3; return; }
-    auto getApi = reinterpret_cast<int32_t (*)(uint32_t, LmxxfNrApi *)>(GetProcAddress(g_nr.module, "LmxxfNrGetApi"));
-    if (getApi == nullptr) { Log("nr: LmxxfNrGetApi missing"); g_nr.state = 3; return; }
+    auto getApi = reinterpret_cast<int32_t (*)(uint32_t, MochiNrApi *)>(GetProcAddress(g_nr.module, "LmxxfNrGetApi") /* DLL 导出名：历史 ABI 名，权重已是 mochizuki */);
+    if (getApi == nullptr) { Log("nr: MochiNrGetApi missing"); g_nr.state = 3; return; }
     g_nr.api.struct_size = sizeof g_nr.api;
-    if (getApi(LMXXF_NR_ABI_VERSION, &g_nr.api) != LMXXF_NR_OK) { Log("nr: GetApi rejected"); g_nr.state = 3; return; }
+    if (getApi(MOCHI_NR_ABI_VERSION, &g_nr.api) != MOCHI_NR_OK) { Log("nr: GetApi rejected"); g_nr.state = 3; return; }
 
     g_nr.setControls = reinterpret_cast<PFN_MochizukiNrSetControls>(GetProcAddress(g_nr.module, "MochizukiNrSetControls"));
     g_nr.getInfo = reinterpret_cast<PFN_MochizukiNrGetInfo>(GetProcAddress(g_nr.module, "MochizukiNrGetInfo"));
@@ -524,21 +524,21 @@ void InitSession(std::wstring dir)
     }
     Log("nr: controls %s, info %s", g_nr.setControls ? "yes" : "no", g_nr.getInfo ? "yes" : "no");
 
-    LmxxfNrCapabilities caps{};
+    MochiNrCapabilities caps{};
     caps.struct_size = sizeof caps;
-    if (g_nr.api.QueryCapabilities && g_nr.api.QueryCapabilities(&caps) == LMXXF_NR_OK)
+    if (g_nr.api.QueryCapabilities && g_nr.api.QueryCapabilities(&caps) == MOCHI_NR_OK)
         Log("nr: caps max %ux%u hip %u", caps.max_input_width, caps.max_input_height, caps.hip_ready);
 
-    LmxxfNrCreateInfo ci{};
+    MochiNrCreateInfo ci{};
     ci.struct_size = sizeof ci;
     ci.device = g_devRef;
     ci.queue = g_queueRef;
     ci.assets_directory = dir.c_str();
-    ci.flags = LMXXF_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK | LMXXF_NR_CREATE_FLAG_ACO;
+    ci.flags = MOCHI_NR_CREATE_FLAG_ZERO_OUTPUT_FALLBACK | MOCHI_NR_CREATE_FLAG_ACO;
 
     void *session = nullptr;
     int32_t rc = g_nr.api.Create(&ci, &session);
-    if (rc != LMXXF_NR_OK) {
+    if (rc != MOCHI_NR_OK) {
         char err[512]{};
         if (g_nr.api.GetLastError) g_nr.api.GetLastError(err, sizeof err);
         Log("nr: Create rc=%d %s", rc, err);
@@ -547,7 +547,7 @@ void InitSession(std::wstring dir)
     }
     Log("nr: created, compiling pipelines");
     rc = g_nr.api.PrepareSession(session);
-    if (rc != LMXXF_NR_OK) {
+    if (rc != MOCHI_NR_OK) {
         char err[512]{};
         if (g_nr.api.GetLastError) g_nr.api.GetLastError(err, sizeof err);
         Log("nr: PrepareSession rc=%d %s", rc, err);
@@ -589,7 +589,7 @@ bool ReplayGuarded(void **ctx, DispatchDesc *d, DispatchFn original)
 
 // The RenoDX stage is what the runtime runs by default (renodx = 1), and in that stage the model
 // controls -- passes, detail/colour strength, model scale -- are documented as unused: the reno_*
-// fields take over. That is why a panel writing only LmxxfNrFrameInfo changed nothing.
+// fields take over. That is why a panel writing only MochiNrFrameInfo changed nothing.
 void SendControls(bool force)
 {
     if (g_nr.setControls == nullptr || !g_nr.controlsReady || g_nr.session == nullptr) return;
@@ -681,7 +681,7 @@ void RefreshInfo()
     g_nr.infoAt = now;
     MochizukiNrInfo info{};
     info.struct_size = g_nr.infoStructSize;
-    if (g_nr.getInfo(g_nr.session, &info) == LMXXF_NR_OK) g_nr.info = info;
+    if (g_nr.getInfo(g_nr.session, &info) == MOCHI_NR_OK) g_nr.info = info;
 }
 
 std::mutex g_runMutex;   // a game may submit from more than one thread; one job at a time here
@@ -699,19 +699,19 @@ bool RunJob(Job &j)
     ID3D12Resource *privateOutput = nullptr;
 
     if (g_cfg.enabled && g_nr.state == 2 && color != nullptr) {
-        LmxxfNrFrameInfo fi{};
+        MochiNrFrameInfo fi{};
         fi.struct_size = sizeof fi;
         fi.frame_id = ++g_nr.frame;
         fi.color = color;
         fi.color_width = j.width;
         fi.color_height = j.height;
         fi.color_state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        fi.flags = LMXXF_NR_FRAME_FLAG_STRENGTH;
+        fi.flags = MOCHI_NR_FRAME_FLAG_STRENGTH;
         // Anti-halo holds each pixel inside the first pass's local range; the runtime implements it
         // as a per-frame flag plus a margin in the controls, and only meaningful with 2+ passes.
-        if (g_cfg.antiHalo && g_cfg.passes >= 2) fi.flags |= LMXXF_NR_FRAME_FLAG_ANTI_HALO;
+        if (g_cfg.antiHalo && g_cfg.passes >= 2) fi.flags |= MOCHI_NR_FRAME_FLAG_ANTI_HALO;
         if (g_cfg.debugView != 0) {
-            fi.flags |= LMXXF_NR_FRAME_FLAG_DEBUG_VIEW;
+            fi.flags |= MOCHI_NR_FRAME_FLAG_DEBUG_VIEW;
             fi.debug_view = (uint32_t)g_cfg.debugView;
         }
         fi.transfer_strength = g_cfg.transfer;
@@ -721,13 +721,13 @@ bool RunJob(Job &j)
         fi.reset = j.reset ? 1u : 0u;
 
         const bool talk = g_nr.frame <= 5 || g_nr.frame % 300 == 0;
-        LmxxfNrJob nrJob{};
+        MochiNrJob nrJob{};
         nrJob.struct_size = sizeof nrJob;
         SendControls(false);
         const double tPrep = NowMs();
         int32_t rc = g_nr.api.PrepareFrame(g_nr.session, &fi, &nrJob);
         g_stats.prepare += NowMs() - tPrep;
-        if (rc != LMXXF_NR_OK) {
+        if (rc != MOCHI_NR_OK) {
             if (talk) {
                 char st[256]{};
                 if (g_nr.api.GetStatus) g_nr.api.GetStatus(g_nr.session, st, sizeof st);
@@ -796,7 +796,7 @@ bool RunJob(Job &j)
                         c->ResourceBarrier(1, &b);
                     }
                     const double t0 = NowMs();
-                    if (g_nr.api.RecordInputs(g_nr.session, nrJob.handle, c) != LMXXF_NR_OK) recorded = false;
+                    if (g_nr.api.RecordInputs(g_nr.session, nrJob.handle, c) != MOCHI_NR_OK) recorded = false;
                     g_stats.recordIn += NowMs() - t0;
                 });
                 if (!submitted || !recorded) {
@@ -807,7 +807,7 @@ bool RunJob(Job &j)
                                const double t0 = NowMs();
                                const int32_t hipRc = g_nr.api.EnqueueHip(g_nr.session, nrJob.handle, g_sub.queue);
                                g_stats.enqueue += NowMs() - t0;
-                               if (hipRc == LMXXF_NR_OK) return false;
+                               if (hipRc == MOCHI_NR_OK) return false;
                                return true;
                            }()) {
                     char err[256]{};
@@ -836,7 +836,7 @@ bool RunJob(Job &j)
     const bool submitted = g_sub.Submit([&](ID3D12GraphicsCommandList *c) {
         if (ran && privateOutput != nullptr) {
             const int32_t outRc = g_nr.api.RecordOutputs(g_nr.session, jobHandle, c);
-            if (outRc != LMXXF_NR_OK) Log("!! RecordOutputs rc=%d", outRc);
+            if (outRc != MOCHI_NR_OK) Log("!! RecordOutputs rc=%d", outRc);
         }
         // No copy back into colour: the upscaler is simply pointed at the network's output. That is
         // what the upstream add-on does (fed = neural_oneshot.Delivered()), and it removes every
