@@ -100,7 +100,7 @@ fsr3-slot: drain islands=3412 results=1
 ### `Drain()` 的语义：只等，不补拷
 
 `Drain()` 是 `WaitForQueue`（等所有已提交的岛完成）→ 清空结果 FIFO → 打上面那行日志 → 返回 `true`。
-**它不往任何纹理里拷东西**，理由三条（2026-11-03 裁决，优先于 multislot.md §3.8）：
+**它不往任何纹理里拷东西**，契约见 `docs/multislot.md` §3.8 与 §4 F12，理由三条：
 
 1. 调用点是**停流**（`_ReleaseNgxConsumers` 之前），不是每帧；
 2. 在此之前 `_PublishBackendTexture` 已经对最后一帧做过
@@ -109,11 +109,18 @@ fsr3-slot: drain islands=3412 results=1
 3. `Drain()` 没有目标纹理参数，**缓存最近一次 `ctx.output` 指针**在 `Resize()` 重建 effect drawer
    纹理后立即悬空，是"零视觉收益 + 多一条失效路径"。
 
+它也**不调 `context11->Flush()`**：这里已经 `WaitForQueue` 过，Flush 既不改变等待语义，也不解决
+"共享纹理仍被 D3D11 命令引用"这个残留（上游 `~Impl` 同样只 `WaitForQueue`，这笔账本来就存在）。
+
 `lag=1` 时停流丢掉最后一帧（呈现 U(N−1)）是**延迟语义本身**，不是 bug；丢了几帧由
 `results=` 字段记账，不在析构里静默丢弃。
 
 判据见 multislot.md §6：阶段 1 看 `slotWaitAvgMs`（应 →0）与"性能应当不变 ≥3 fps 才算失败"；
 阶段 2 看 `harvestMiss`（应 ≤5%）与三档帧数。
+
+`Draw` 内的**按槽等待有 4000 ms 上界**（§4 F13，对齐 `mochinr.cpp:366` 的 `WaitSlot`）：超时即
+`failed`，之后每次 `Draw` 直接返回 false。所以 `failed=` 跳 1 基本等于设备挂死/移除，不是补丁
+逻辑错；`~Impl` 与 `Drain()` 仍是无界等待（与上游析构一致）。
 
 ## 如何验证收益（G0 → 阶段 1 → 阶段 2）
 
