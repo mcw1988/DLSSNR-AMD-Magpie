@@ -115,6 +115,43 @@ fsr3-slot: drain islands=3412 results=1
 判据见 multislot.md §6：阶段 1 看 `slotWaitAvgMs`（应 →0）与"性能应当不变 ≥3 fps 才算失败"；
 阶段 2 看 `harvestMiss`（应 ≤5%）与三档帧数。
 
+## 如何验证收益（G0 → 阶段 1 → 阶段 2）
+
+顺序不能颠倒（判据见 multislot.md §2 与 §6）。
+
+**第一步：G0 判别实验。** 没做这一步之前，任何"预计 123 fps / 66 fps"都只是纸面数字。
+`ratio = 每帧的引擎忙秒数 ÷ frame_time`，`\GPU Engine(*)\Utilization Percentage` 每个引擎实例
+各自 0–100%，并行引擎求和可以 >1（ratio=1.2 = 已饱和，不是算错）。
+
+```powershell
+# 先干跑确认脚本与实例过滤没问题（开发机也能跑，不采样）
+powershell -ExecutionPolicy Bypass -File scripts/measure-gpu-busy.ps1 -DryRun
+
+# 场景跑起来（Magpie 正在缩放）后实测；默认预热 10 s、窗口 30 s、每秒一个样本
+powershell -ExecutionPolicy Bypass -File scripts/measure-gpu-busy.ps1 -SourceDir D:\Magpie-NR-045
+
+# 日志没有 publication timing 行时，直接给稳态帧率
+powershell -ExecutionPolicy Bypass -File scripts/measure-gpu-busy.ps1 -Fps 47
+```
+
+| ratio | 结论 |
+|---|---|
+| `> 0.85` | **停**：求和是吞吐的必然，max 天花板不存在，不做阶段 2，主线转缩岛 |
+| `0.60 ≤ ratio ≤ 0.85` | 台阶打 `(1−ratio)` 折扣，验收线按实测下调 |
+| `< 0.60` | 台阶成立，按 123–125 / 66–70 fps 验收 |
+
+脚本按 PID 过滤引擎实例（`pid_<PID>_...`），否则浏览器/桌面合成会把 ratio 抬上去；
+`-OutFile` 的 CSV 头部写好参数与结论，可直接贴进 `docs/measurements.md`。
+样本无效（窗口内 GPU 近乎空闲，`avg_busy_engines < 0.05`）时**退出码 1 且不给判据**——那是
+"没采到东西"，不是"台阶成立"。
+
+**第二步：阶段 1 的判据是"性能不变"**（A2）：`slots=3/lag=0` 与 `slots=1` 的平衡点差 ≤ ±1 fps、
+`fenceAvgMs` 差 ≤ 0.3 ms；**掉 ≥3 fps 才算失败**。核心读数是 `fsr3-slot:` 的 `slotWaitAvgMs`
+（应当 →0）。如果实测显著变快，那是意外发现，先记录不要当成阶段 1 的功劳。
+
+**第三步：阶段 2 的三条验收线**（B2–B4）：0.5/0.35 档到 123–125 fps、1.0 档到 66–70 fps、
+`harvestMiss ≤ 5%`（`> 20%` 说明岛比帧间隔长，退阶段 1）。前提是 `mochinr` 的 `inflight ≥ slots + lag`。
+
 ## 显存代价（multislot.md §3.6）
 
 4K 输入（3840×2054）/ 输出（3840×2160）BGRA8 下每槽约 96 MB（输入 31.6 + 输出 33.2 + 运动矢量 31.6），
