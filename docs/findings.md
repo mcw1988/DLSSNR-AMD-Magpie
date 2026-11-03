@@ -203,6 +203,7 @@ mochizuki  ：15.63 ms = 游戏 + 3.27 (网络) + 光流 + 4K 拷贝 + 桥接等
 | S2 | **阶段 1（只加多槽、输出语义不变）的收益是 0**——不是 0.1–0.5 ms | ③ 在稳态下已经把 D3D11 队列推过了岛，于是 ① 的 `WaitForFence` 走 `GetCompletedValue` 快路径直接放行（`:62`），①本来就空转；多槽只能让空转更空转 |
 | S3 | 阶段 1 的真实价值是**解除 allocator/纹理的复用依赖**，即阶段 2 的前置条件 | 单份 `allocator12`/`commandList12` 与单份共享纹理（`:318-319`）是 ① 与 `:512-513` 的 `Reset` 必须串行的唯一理由 |
 | S4 | ③ **不在补丁范围**（`Renderer.cpp` 属另一条主线）；一旦顺手改掉，阶段 1/阶段 2 的收益就再也分不清归属 | [multislot.md](multislot.md) §7.3 的共享约定 |
+| S5 | `Drain()` **只等不补拷**：调用点 `_DrainNgxConsumers` 是停流时（`Renderer.cpp:3109-3121`），而发布路径已对最后一帧做过 `Signal+Flush+等围栏`（`:4614-4624`），那一帧早交给系统了；再往 `ctx.output` 写一次 U(N) 视觉零收益，缓存 `ctx.output` 指针则在 `Resize()` 后悬空 | 2026-11-03 裁决，优先于 multislot.md §3.8；实现见 `src/magpie-patches/README.md`「`Drain()` 的语义」 |
 
 **待测**
 

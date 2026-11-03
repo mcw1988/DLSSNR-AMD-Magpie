@@ -3,7 +3,7 @@
 上游仓库: https://github.com/SAOG0721/Magpie
 分支:     experimental
 基准提交: 6940f84 fix(release): keep worktree outputs in the workspace release directory
-改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+89/-13)
+改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+86/-15)
 依赖:     必须叠加在 0001-fsr3-slot-ring.patch 之上（同一个文件、同一段代码），不能单独应用
 应用:     git -C <Magpie 源码目录> apply 0001-fsr3-slot-ring.patch
           git -C <Magpie 源码目录> apply 0002-fsr3-output-lag.patch
@@ -13,7 +13,7 @@
 注意：本补丁只对基准提交 6940f84 + 0001 有效。宿主更新后必须重制，不要直接 apply。
 
 diff --git a/src/Magpie.Core/FSR3Upscaler.cpp b/src/Magpie.Core/FSR3Upscaler.cpp
-index 7df2d49..c4ecea5 100644
+index a982b9f..41354c4 100644
 --- a/src/Magpie.Core/FSR3Upscaler.cpp
 +++ b/src/Magpie.Core/FSR3Upscaler.cpp
 @@ -5,6 +5,7 @@
@@ -63,28 +63,28 @@ index 7df2d49..c4ecea5 100644
  
  	// 槽 0 必须先建：aux 清理要用它的 allocator / list 录一次并在建围栏之前提交，
  	// 其余槽等围栏与 WaitForQueue 之后再建，否则 aux 屏障会落在还没建的 list 上。
-@@ -592,6 +616,13 @@ bool FSR3Upscaler::Drain() noexcept {
- 		return false;
- 	}
- 	for (Impl::Slot& slot : impl.slots) slot.pending = false;
-+	// lag=1 时最后一帧的结果还挂在 FIFO 里，这是正常状态，必须在这里收尾而不是在析构里
-+	// 静默丢弃（§4 F12）：清空即"已收尾"，不留悬挂条目。
-+	if (!impl.results.empty()) {
-+		Logger::Get().Info(fmt::format("fsr3-slot: drain released {} pending lag result(s)",
-+			(uint32_t)impl.results.size()));
-+		impl.results.clear();
-+	}
- 	// Drain() 没有目标纹理参数，所以这里只交出工作、不拷贝任何东西；
- 	// 主机停流时会整体重建效果链，这一帧不呈现。
- 	impl.context11->Flush();
-@@ -609,8 +640,41 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -595,8 +619,11 @@ bool FSR3Upscaler::Drain() noexcept {
+ 	// Drain() 只等不补拷（2026-11-03 裁决，优先于 multislot.md §3.8）：发布路径
+ 	// Renderer.cpp:4614-4624 已经对最后一帧做过 Signal + Flush + 等围栏，那一帧
+ 	// 早就进呈现环交给系统了；而 Drain() 没有目标纹理参数，缓存 ctx.output 指针在
+-	// Resize() 之后立即悬空。lag=0 时 FIFO 恒空，所以 results 恒为 0。
+-	Logger::Get().Info(fmt::format("fsr3-slot: drain islands={} results=0", impl.drawSerial));
++	// Resize() 之后立即悬空。lag=1 时最后一帧的结果还挂在 FIFO
++	// 里，这是延迟语义本身、不是 bug（§4 F12）——不补拷、不留悬挂条目，丢掉的帧数记在这行日志里。
++	Logger::Get().Info(fmt::format("fsr3-slot: drain islands={} results={}",
++		impl.drawSerial, (uint32_t)impl.results.size()));
++	impl.results.clear();
+ 	return true;
+ }
+ 
+@@ -611,8 +638,41 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	impl.resetHistory |= guidanceReset || drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
  
  	// 槽游标：按 Draw 调用次数取模，不按 captureFrameId（补帧下一个内容帧对应多次 Draw）。
 -	Impl::Slot& slot = impl.slots[(size_t)(impl.drawSerial++ % (uint64_t)impl.slots.size())];
 +	const size_t slotIndex = (size_t)(impl.drawSerial % (uint64_t)impl.slots.size());
 +	const bool hadResult = !impl.results.empty();
-+
+ 
 +	// F4：slack = slots - lag 必须 >= 1。lag=1 时收割的槽绝不能是本帧要提交的槽，
 +	// 否则同一个 output11 会一边被拷出一边被岛重写。
 +	if (hadResult && impl.results.front().slotIndex == (uint32_t)slotIndex) {
@@ -115,12 +115,12 @@ index 7df2d49..c4ecea5 100644
 +		impl.context11->CopyResource(output, impl.slots[result.slotIndex].output11.get());
 +		impl.slots[result.slotIndex].pending = false;
 +	}
- 
++
 +	// ── B. 为"本帧输入"提交一个新岛 ─────────────────────────────────
  	// 认领槽：只等"自己的"岛。上游这里等的是上一帧；现在等的是 slots 次 Draw 之前提交的岛，
  	// 稳态下 GetCompletedValue 直接放行（multislot.md §3.3 第 1 步）。
  	const double waitBeginMs = NowMs();
-@@ -741,6 +805,11 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -743,6 +803,11 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  		Logger::Get().ComError("Signal FSR3 island fence failed", hr);
  		return false;
  	}
@@ -132,7 +132,7 @@ index 7df2d49..c4ecea5 100644
  
  	// islandValueLag：提交瞬间"已提交的围栏值"与"已完成的围栏值"之差（单位是围栏值，
  	// 每个岛占 2）。稳态下应稳定在 2*(slots-1) 以内，突然长大说明岛变慢了。
-@@ -749,15 +818,20 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -751,15 +816,20 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	impl.statIslandLagSum += islandLag;
  	if (islandLag > impl.statIslandLagMax) impl.statIslandLagMax = islandLag;
  
@@ -161,7 +161,7 @@ index 7df2d49..c4ecea5 100644
  
  	impl.resetHistory = false;
  	if (guidanceReset) impl.lastGuidanceResetFrameId = drawContext.frameId;
-@@ -765,16 +839,17 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -767,16 +837,17 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	++impl.statWindowDraws;
  	if (impl.statWindowDraws >= kStatsInterval) {
  		Logger::Get().Info(fmt::format(

@@ -92,7 +92,25 @@ powershell -ExecutionPolicy Bypass -File scripts\Build-Release.ps1
 ```
 FSR3 slot ring: slots=3 lag=0
 fsr3-slot: draws=120 slotWaitAvgMs=0.0040 islandValueLagAvg=0.50 islandValueLagMax=2 harvestMiss=0/120 failed=0 slots=3 lag=0
+fsr3-slot: drain islands=3412 results=1
 ```
+
+第三行只在**停流**时出现一次（`Renderer.cpp:3109-3121` 的 `_DrainNgxConsumers`）。
+
+### `Drain()` 的语义：只等，不补拷
+
+`Drain()` 是 `WaitForQueue`（等所有已提交的岛完成）→ 清空结果 FIFO → 打上面那行日志 → 返回 `true`。
+**它不往任何纹理里拷东西**，理由三条（2026-11-03 裁决，优先于 multislot.md §3.8）：
+
+1. 调用点是**停流**（`_ReleaseNgxConsumers` 之前），不是每帧；
+2. 在此之前 `_PublishBackendTexture` 已经对最后一帧做过
+   `Signal → SetEventOnCompletion → Flush → 等围栏`（`Renderer.cpp:4614-4624`），
+   那一帧早被拷进呈现环交给系统了——再往 `ctx.output` 写一次 U(N)，画面上不会有任何变化；
+3. `Drain()` 没有目标纹理参数，**缓存最近一次 `ctx.output` 指针**在 `Resize()` 重建 effect drawer
+   纹理后立即悬空，是"零视觉收益 + 多一条失效路径"。
+
+`lag=1` 时停流丢掉最后一帧（呈现 U(N−1)）是**延迟语义本身**，不是 bug；丢了几帧由
+`results=` 字段记账，不在析构里静默丢弃。
 
 判据见 multislot.md §6：阶段 1 看 `slotWaitAvgMs`（应 →0）与"性能应当不变 ≥3 fps 才算失败"；
 阶段 2 看 `harvestMiss`（应 ≤5%）与三档帧数。

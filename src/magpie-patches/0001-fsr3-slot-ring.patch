@@ -3,7 +3,7 @@
 上游仓库: https://github.com/SAOG0721/Magpie
 分支:     experimental
 基准提交: 6940f84 fix(release): keep worktree outputs in the workspace release directory
-改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+261/-60), src/Magpie.Core/FSR3Upscaler.h (+3)
+改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+263/-60), src/Magpie.Core/FSR3Upscaler.h (+3)
 依赖:     无（可单独应用）；0002 必须叠加在本补丁之上，不能反过来
 应用:     git -C <Magpie 源码目录> apply 0001-fsr3-slot-ring.patch
           （或 PowerShell: scripts/apply-magpie-patch.ps1 -Stage 1）
@@ -13,7 +13,7 @@
 不要直接 apply 到新提交上（也不会成功）。
 
 diff --git a/src/Magpie.Core/FSR3Upscaler.cpp b/src/Magpie.Core/FSR3Upscaler.cpp
-index b5d3677..7df2d49 100644
+index b5d3677..a982b9f 100644
 --- a/src/Magpie.Core/FSR3Upscaler.cpp
 +++ b/src/Magpie.Core/FSR3Upscaler.cpp
 @@ -11,21 +11,62 @@
@@ -242,7 +242,7 @@ index b5d3677..7df2d49 100644
  	if (useFsr4) {
  		impl->providerModule = LoadLibraryW(L"amd_fidelityfx_upscaler_dx12.dll");
  		if (!impl->providerModule) {
-@@ -486,60 +579,119 @@ bool FSR3Upscaler::Resize(DeviceResources& resources, ID3D11Texture2D* input,
+@@ -486,60 +579,121 @@ bool FSR3Upscaler::Resize(DeviceResources& resources, ID3D11Texture2D* input,
  	return Initialize(resources, input, output, _motionRequest, _useFsr4);
  }
  
@@ -259,9 +259,11 @@ index b5d3677..7df2d49 100644
 +		return false;
 +	}
 +	for (Impl::Slot& slot : impl.slots) slot.pending = false;
-+	// Drain() 没有目标纹理参数，所以这里只交出工作、不拷贝任何东西；
-+	// 主机停流时会整体重建效果链，这一帧不呈现。
-+	impl.context11->Flush();
++	// Drain() 只等不补拷（2026-11-03 裁决，优先于 multislot.md §3.8）：发布路径
++	// Renderer.cpp:4614-4624 已经对最后一帧做过 Signal + Flush + 等围栏，那一帧
++	// 早就进呈现环交给系统了；而 Drain() 没有目标纹理参数，缓存 ctx.output 指针在
++	// Resize() 之后立即悬空。lag=0 时 FIFO 恒空，所以 results 恒为 0。
++	Logger::Get().Info(fmt::format("fsr3-slot: drain islands={} results=0", impl.drawSerial));
 +	return true;
 +}
 +
@@ -380,7 +382,7 @@ index b5d3677..7df2d49 100644
  	desc.jitterOffset = { 0.0f, 0.0f };
  	desc.motionVectorScale = { 1.0f, 1.0f };
  	desc.renderSize = { impl.inputWidth, impl.inputHeight };
-@@ -559,6 +711,8 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -559,6 +713,8 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	}
  	const ffxReturnCode_t rc = impl.dispatch(&impl.context, &desc.header);
  	if (rc != FFX_API_RETURN_OK) {
@@ -389,7 +391,7 @@ index b5d3677..7df2d49 100644
  		Logger::Get().Error(fmt::format("Dispatch {} failed ({})",
  			impl.useFsr4 ? "FSR 4.1.1" : "FSR 3.1.5", (uint32_t)rc));
  		return false;
-@@ -566,19 +720,62 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -566,19 +722,62 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	for (UINT i = 0; i < barrierCount; ++i) {
  		std::swap(barriers[i].Transition.StateBefore, barriers[i].Transition.StateAfter);
  	}
@@ -462,7 +464,7 @@ index b5d3677..7df2d49 100644
  	return true;
  }
  
-@@ -596,6 +793,7 @@ bool FSR3Upscaler::Initialize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2
+@@ -596,6 +795,7 @@ bool FSR3Upscaler::Initialize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2
  }
  bool FSR3Upscaler::Resize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2D*) noexcept { return false; }
  bool FSR3Upscaler::Draw(const NativeEffectDrawContext&) noexcept { return false; }
