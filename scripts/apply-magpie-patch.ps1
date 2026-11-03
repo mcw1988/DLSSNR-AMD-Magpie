@@ -17,6 +17,8 @@ param(
     [int]$Stage = 1,
     # 顺带打 0003（DLSSNR_AMD 路径）：与 0001/0002 不同文件，可任意组合
     [switch]$IncludeAmdSlot,
+    # 补丁所在目录；不填则用本仓库的 src\magpie-patches（测试包里请显式指定）
+    [string]$PatchDir,
     # 只校验，结束时还原到调用前的状态
     [switch]$CheckOnly,
     # git.exe 的完整路径；不填则依次找 PATH、Git for Windows 的默认安装位置、where.exe
@@ -48,7 +50,10 @@ function Resolve-GitExe([string]$Explicit) {
 }
 
 $repo = Split-Path $PSScriptRoot -Parent
-$patchDir = Join-Path $repo 'src\magpie-patches'
+$patchDir = if ($PatchDir) { (Resolve-Path -LiteralPath $PatchDir).Path } else { Join-Path $repo 'src\magpie-patches' }
+if (-not (Test-Path (Join-Path $patchDir '0001-fsr3-slot-ring.patch'))) {
+    throw "补丁目录里找不到 0001-fsr3-slot-ring.patch：$patchDir（测试包里请用 -PatchDir 指定）"
+}
 $baseCommit = '6940f84'
 
 if (-not $SourceDir) {
