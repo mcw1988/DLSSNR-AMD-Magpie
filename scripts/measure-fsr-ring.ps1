@@ -150,19 +150,24 @@ if ($LogPath) {
         exit 1
     }
 
-    # 帧时间：相邻两行时间戳差 ÷ 120，逐段求平均（N 行 → N-1 段）
-    $frameTimeMs = 0.0
-    $frames = 0.0
-    if ($publicationStamps.Count -ge 2) {
-        $sumMs = 0.0
-        for ($i = 1; $i -lt $publicationStamps.Count; $i++) {
-            $sumMs += ($publicationStamps[$i] - $publicationStamps[$i - 1]).TotalMilliseconds
-        }
-        $frameTimeMs = $sumMs / ($publicationStamps.Count - 1) / $FramesPerPublicationLine
-        $frames = $FramesPerPublicationLine * ($publicationStamps.Count - 1)
-    } else {
-        Write-Host "只有 $($publicationStamps.Count) 行 publication timing，算不出帧时间（至少要 2 行）" -ForegroundColor Yellow
+    # 只有 fsr3-slot 行、没有 publication 行时算不出帧时间。此时绝不能写一行 fps=0 的数据，
+    # 否则汇总阶段会拿它当"与基线差 0 fps"判成通过——一个 0 帧的样本不该有机会通过验收。
+    if ($publicationStamps.Count -lt 2) {
+        Write-Host "只有 $($publicationStamps.Count) 行 publication timing，算不出帧时间（至少要 2 行）" -ForegroundColor Red
+        Write-Host ("  fsr3-slot 行倒是有 {0} 行，但那是补丁自己的统计，替代不了帧时间。" -f $slotLines.Count) -ForegroundColor Yellow
+        Write-Host '  要跑够时长（publication 每 120 帧一行：60 s @120fps 约 60 行），并确认日志级别是 info。' -ForegroundColor Yellow
+        Write-Host '  本次不写入 CSV、退出码 1。' -ForegroundColor Yellow
+        exit 1
     }
+
+    # 帧时间：相邻两行时间戳差 ÷ 120，逐段求平均（N 行 → N-1 段）
+    # 上面已保证 Count >= 2，这里不会再出现"算不出来"的分支。
+    $sumMs = 0.0
+    for ($i = 1; $i -lt $publicationStamps.Count; $i++) {
+        $sumMs += ($publicationStamps[$i] - $publicationStamps[$i - 1]).TotalMilliseconds
+    }
+    $frameTimeMs = $sumMs / ($publicationStamps.Count - 1) / $FramesPerPublicationLine
+    $frames = $FramesPerPublicationLine * ($publicationStamps.Count - 1)
 
     $fenceAvg = 0.0
     if ($fenceSamples.Count -gt 0) {
