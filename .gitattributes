@@ -15,3 +15,5 @@
 # 补丁文本必须按 LF 检出：git apply 的上下文行若被换成 CRLF，就对不上宿主源码（LF）。
 # 只对宿主补丁目录强制，避免动到历史文件的换行。
 src/magpie-patches/*.patch text eol=lf
+# 同理：这份 359 行补丁的 index 是 LF、工作区长期是 CRLF，谁拿工作区副本去 apply 就踩同一个坑
+src/opennr-patches/*.patch text eol=lf

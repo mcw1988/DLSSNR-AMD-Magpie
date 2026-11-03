@@ -91,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File scripts\Build-Release.ps1
 
 ```
 FSR3 slot ring: slots=3 lag=0
-fsr3-slot: draws=120 slotWaitAvgMs=0.0040 islandValueLagAvg=0.50 islandValueLagMax=2 harvestMiss=0/120 failed=0 slots=3 lag=0
+fsr3-slot: draws=120 slotWaitAvgMs=0.0040 islandValueLagAvg=0.50 islandValueLagMax=2 harvestMiss=0/120 framesDropped=0 slots=3 lag=0
 fsr3-slot: drain islands=3412 results=1
 ```
 
@@ -118,9 +118,10 @@ fsr3-slot: drain islands=3412 results=1
 判据见 multislot.md §6：阶段 1 看 `slotWaitAvgMs`（应 →0）与"性能应当不变 ≥3 fps 才算失败"；
 阶段 2 看 `harvestMiss`（应 ≤5%）与三档帧数。
 
-`Draw` 内的**按槽等待有 4000 ms 上界**（§4 F13，对齐 `mochinr.cpp:366` 的 `WaitSlot`）：超时即
-`failed`，之后每次 `Draw` 直接返回 false。所以 `failed=` 跳 1 基本等于设备挂死/移除，不是补丁
-逻辑错；`~Impl` 与 `Drain()` 仍是无界等待（与上游析构一致）。
+`Draw` 内的**按槽等待有 4000 ms 上界**（§4 F13，与 `mochinr.cpp:366` 的 `WaitSlot` 一致）：超时
+先打 `FSR3 slot fence wait timed out after 4000 ms (value=…, completed=…)`，再 `failed`，之后每次
+`Draw` 直接返回 false。所以 `framesDropped=` 跳 1 基本等于设备挂死/移除，不是补丁逻辑错；
+`~Impl` 与 `Drain()` 走默认的 `INFINITE`（收尾必须等完，与上游析构一致）。
 
 ## 如何验证收益（G0 → 阶段 1 → 阶段 2）
 

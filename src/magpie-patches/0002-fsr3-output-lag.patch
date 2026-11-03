@@ -3,7 +3,7 @@
 上游仓库: https://github.com/SAOG0721/Magpie
 分支:     experimental
 基准提交: 6940f84 fix(release): keep worktree outputs in the workspace release directory
-改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+86/-15)
+改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+85/-15)
 依赖:     必须叠加在 0001-fsr3-slot-ring.patch 之上（同一个文件、同一段代码），不能单独应用
 应用:     git -C <Magpie 源码目录> apply 0001-fsr3-slot-ring.patch
           git -C <Magpie 源码目录> apply 0002-fsr3-output-lag.patch
@@ -13,7 +13,7 @@
 注意：本补丁只对基准提交 6940f84 + 0001 有效。宿主更新后必须重制，不要直接 apply。
 
 diff --git a/src/Magpie.Core/FSR3Upscaler.cpp b/src/Magpie.Core/FSR3Upscaler.cpp
-index fc13bb9..c820dd1 100644
+index 35a75af..c1ba885 100644
 --- a/src/Magpie.Core/FSR3Upscaler.cpp
 +++ b/src/Magpie.Core/FSR3Upscaler.cpp
 @@ -5,6 +5,7 @@
@@ -24,7 +24,7 @@ index fc13bb9..c820dd1 100644
  #include <ffx_api.h>
  #include <dx12/ffx_api_dx12.h>
  #include <ffx_upscale.h>
-@@ -106,6 +107,16 @@ struct FSR3Upscaler::Impl {
+@@ -105,6 +106,16 @@ struct FSR3Upscaler::Impl {
  	uint64_t drawSerial = 0;
  	uint32_t lag = 0;
  
@@ -41,7 +41,7 @@ index fc13bb9..c820dd1 100644
  	// 失败即 poisoned（multislot.md §4 F7），不做局部重试。
  	bool failed = false;
  	uint64_t framesDropped = 0;
-@@ -417,7 +428,20 @@ bool FSR3Upscaler::Initialize(
+@@ -424,7 +435,20 @@ bool FSR3Upscaler::Initialize(
  		slotCount = Impl::kMaxSlots;
  	}
  	impl->slots.resize(slotCount);
@@ -63,7 +63,7 @@ index fc13bb9..c820dd1 100644
  
  	// 槽 0 必须先建：aux 清理要用它的 allocator / list 录一次并在建围栏之前提交，
  	// 其余槽等围栏与 WaitForQueue 之后再建，否则 aux 屏障会落在还没建的 list 上。
-@@ -603,8 +627,11 @@ bool FSR3Upscaler::Drain() noexcept {
+@@ -609,8 +633,11 @@ bool FSR3Upscaler::Drain() noexcept {
  	// 参数，缓存 ctx.output 指针会在 Resize() 之后悬空。
  	// 也不调 Flush()：这里已经 WaitForQueue 过，Flush 既不改变等待语义，也不解决
  	// "共享纹理仍被 D3D11 命令引用"这个残留（上游 ~Impl 同样只 WaitForQueue）。
@@ -77,7 +77,7 @@ index fc13bb9..c820dd1 100644
  	return true;
  }
  
-@@ -619,8 +646,41 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -625,8 +652,40 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	impl.resetHistory |= guidanceReset || drawContext.inputHistoryReset || !drawContext.isNewCaptureFrame;
  
  	// 槽游标：按 Draw 调用次数取模，不按 captureFrameId（补帧下一个内容帧对应多次 Draw）。
@@ -113,14 +113,13 @@ index fc13bb9..c820dd1 100644
 +			return false;
 +		}
 +		impl.context11->CopyResource(output, impl.slots[result.slotIndex].output11.get());
-+		impl.slots[result.slotIndex].pending = false;
 +	}
 +
 +	// ── B. 为"本帧输入"提交一个新岛 ─────────────────────────────────
  	// 认领槽：只等"自己的"岛。上游这里等的是上一帧；现在等的是 slots 次 Draw 之前提交的岛，
  	// 稳态下 GetCompletedValue 直接放行（multislot.md §3.3 第 1 步）。
  	const double waitBeginMs = NowMs();
-@@ -753,6 +813,11 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -756,6 +815,11 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  		Logger::Get().ComError("Signal FSR3 island fence failed", hr);
  		return false;
  	}
@@ -132,7 +131,7 @@ index fc13bb9..c820dd1 100644
  
  	// islandValueLag：提交瞬间"已提交的围栏值"与"已完成的围栏值"之差（单位是围栏值，
  	// 每个岛占 2）。稳态下应稳定在 2*(slots-1) 以内，突然长大说明岛变慢了。
-@@ -761,15 +826,20 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -764,15 +828,20 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	impl.statIslandLagSum += islandLag;
  	if (islandLag > impl.statIslandLagMax) impl.statIslandLagMax = islandLag;
  
@@ -161,12 +160,12 @@ index fc13bb9..c820dd1 100644
  
  	impl.resetHistory = false;
  	if (guidanceReset) impl.lastGuidanceResetFrameId = drawContext.frameId;
-@@ -777,16 +847,17 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -780,16 +849,17 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	++impl.statWindowDraws;
  	if (impl.statWindowDraws >= kStatsInterval) {
  		Logger::Get().Info(fmt::format(
--			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} failed={} slots={} lag={}",
-+			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} harvestMiss={}/{} failed={} slots={} lag={}",
+-			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} framesDropped={} slots={} lag={}",
++			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} harvestMiss={}/{} framesDropped={} slots={} lag={}",
  			impl.drawSerial,
  			impl.statSlotWaitMs / (double)impl.statWindowDraws,
  			(double)impl.statIslandLagSum / (double)impl.statWindowDraws,

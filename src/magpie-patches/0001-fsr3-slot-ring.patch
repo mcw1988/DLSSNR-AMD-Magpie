@@ -3,7 +3,7 @@
 上游仓库: https://github.com/SAOG0721/Magpie
 分支:     experimental
 基准提交: 6940f84 fix(release): keep worktree outputs in the workspace release directory
-改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+276/-63), src/Magpie.Core/FSR3Upscaler.h (+3)
+改动文件: src/Magpie.Core/FSR3Upscaler.cpp (+280/-64), src/Magpie.Core/FSR3Upscaler.h (+3)
 依赖:     无（可单独应用）；0002 必须叠加在本补丁之上，不能反过来
 应用:     git -C <Magpie 源码目录> apply 0001-fsr3-slot-ring.patch
           （或 PowerShell: scripts/apply-magpie-patch.ps1 -Stage 1）
@@ -13,7 +13,7 @@
 不要直接 apply 到新提交上（也不会成功）。
 
 diff --git a/src/Magpie.Core/FSR3Upscaler.cpp b/src/Magpie.Core/FSR3Upscaler.cpp
-index b5d3677..fc13bb9 100644
+index b5d3677..35a75af 100644
 --- a/src/Magpie.Core/FSR3Upscaler.cpp
 +++ b/src/Magpie.Core/FSR3Upscaler.cpp
 @@ -11,21 +11,65 @@
@@ -23,8 +23,8 @@ index b5d3677..fc13bb9 100644
 +// 统计窗口长度：与主机「Backend publication CPU timing」的 120 帧同频，便于对齐读数。
 +static constexpr uint32_t kStatsInterval = 120;
 +
-+// Draw 内按槽等待的上界（§4 F13，对齐 mochinr.cpp:366 的 WaitSlot）。
-+static constexpr DWORD kSlotWaitTimeoutMs = 4000;
++// Draw 内按槽等待的上界（§4 F13，与 mochinr.cpp:366 的 WaitSlot 一致）。
++static constexpr uint32_t kSlotWaitTimeoutMs = 4000;
 +
 +// 环境变量只接受十进制非负整数；无法解析时返回 fallback（不报错，按 multislot.md §5 回落默认）。
 +static uint32_t ReadEnvUint(const wchar_t* name, uint32_t fallback) noexcept {
@@ -66,9 +66,9 @@ index b5d3677..fc13bb9 100644
 +		winrt::com_ptr<ID3D12CommandAllocator> allocator12;
 +		winrt::com_ptr<ID3D12GraphicsCommandList> commandList12;
 +
-+		// 记账（纯 CPU 字段，不进 GPU）：本槽最近一次岛完成的围栏值，0 = 从未提交
++		// 记账（纯 CPU 字段，不进 GPU）：本槽最近一次岛完成的围栏值，0 = 从未提交。
++		// 这是槽状态的唯一权威来源（认领时只等它），不另设 pending 标志。
 +		uint64_t islandValue = 0;
-+		bool pending = false;
 +	};
 +
  	ID3D11Device5* device11 = nullptr;
@@ -90,7 +90,15 @@ index b5d3677..fc13bb9 100644
  	winrt::com_ptr<ID3D12Resource> zeroMotion12;
  	winrt::com_ptr<ID3D12Resource> flatDepth12;
  	winrt::com_ptr<ID3D12Resource> exposure12;
-@@ -56,17 +100,34 @@ struct FSR3Upscaler::Impl {
+@@ -46,7 +90,6 @@ struct FSR3Upscaler::Impl {
+ 	ffxCreateContextDescUpscaleVersion apiVersion{};
+ 	ffxOverrideVersion overrideVersion{};
+ 	uint64_t fenceValue = 0;
+-	uint64_t lastSubmittedValue = 0;
+ 	uint32_t inputWidth = 0;
+ 	uint32_t inputHeight = 0;
+ 	uint32_t outputWidth = 0;
+@@ -56,17 +99,42 @@ struct FSR3Upscaler::Impl {
  	bool useFsr4 = false;
  	bool resetHistory = true;
  	FrameGuidanceFrameId lastGuidanceResetFrameId = std::numeric_limits<FrameGuidanceFrameId>::max();
@@ -112,10 +120,11 @@ index b5d3677..fc13bb9 100644
  };
  
 -static bool WaitForFence(FSR3Upscaler::Impl& impl, uint64_t value) noexcept {
-+// 默认无限等待：~Impl 与 Drain() 走这条路径（上游析构同样只 WaitForQueue）。
-+// Draw 内的按槽等待必须给上界（§4 F13）——设备挂死时"卡死"比"报错"更难诊断。
++// 默认无限等待：`WaitForQueue`（`~Impl` 与 `Drain`）走默认参数，收尾必须等完——
++// 上游析构同样只 `WaitForQueue`。只有 Draw 里的按槽认领传 4000 ms 上界（§4 F13）：
++// 围栏若永不完成，那里必须报错返回并把对象 poison，而不是把整条后端线程卡死。
 +static bool WaitForFence(FSR3Upscaler::Impl& impl, uint64_t value,
-+	DWORD timeoutMs = INFINITE) noexcept {
++	uint32_t timeoutMs = INFINITE) noexcept {
  	if (!value || impl.fence12->GetCompletedValue() >= value) return true;
  	wil::unique_event_nothrow event;
  	HRESULT hr = event.create();
@@ -124,11 +133,18 @@ index b5d3677..fc13bb9 100644
  	if (FAILED(hr)) return false;
 -	WaitForSingleObject(event.get(), INFINITE);
 -	return true;
-+	return WaitForSingleObject(event.get(), timeoutMs) == WAIT_OBJECT_0;
++	const DWORD waitResult = WaitForSingleObject(event.get(), timeoutMs);
++	if (waitResult == WAIT_OBJECT_0) return true;
++	if (waitResult == WAIT_TIMEOUT) {
++		Logger::Get().Error(fmt::format(
++			"FSR3 slot fence wait timed out after {} ms (value={}, completed={})",
++			timeoutMs, value, impl.fence12->GetCompletedValue()));
++	}
++	return false;
  }
  
  static bool WaitForQueue(FSR3Upscaler::Impl& impl) noexcept {
-@@ -213,6 +274,41 @@ static bool CreateSharedTexture(
+@@ -213,6 +281,41 @@ static bool CreateSharedTexture(
  	return true;
  }
  
@@ -170,7 +186,7 @@ index b5d3677..fc13bb9 100644
  static bool CreateAuxTexture(
  	FSR3Upscaler::Impl& impl,
  	DXGI_FORMAT format,
-@@ -246,7 +342,8 @@ static bool CreateAuxTexture(
+@@ -246,7 +349,8 @@ static bool CreateAuxTexture(
  	uav.Format = format;
  	uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
  	impl.device12->CreateUnorderedAccessView(resource.get(), nullptr, &uav, cpuHandle);
@@ -180,7 +196,7 @@ index b5d3677..fc13bb9 100644
  		gpuHandle, cpuHandle, resource.get(), clearValue, 0, nullptr);
  	barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
  	barrier.Transition.pResource = resource.get();
-@@ -306,30 +403,25 @@ bool FSR3Upscaler::Initialize(
+@@ -306,30 +410,25 @@ bool FSR3Upscaler::Initialize(
  	D3D12_COMMAND_QUEUE_DESC queueDesc{};
  	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
  	hr = impl->device12->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(impl->queue12.put()));
@@ -225,7 +241,7 @@ index b5d3677..fc13bb9 100644
  
  	D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
  	heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-@@ -338,7 +430,7 @@ bool FSR3Upscaler::Initialize(
+@@ -338,7 +437,7 @@ bool FSR3Upscaler::Initialize(
  	hr = impl->device12->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(impl->descriptorHeap12.put()));
  	if (FAILED(hr)) return false;
  	ID3D12DescriptorHeap* heaps[]{ impl->descriptorHeap12.get() };
@@ -234,7 +250,7 @@ index b5d3677..fc13bb9 100644
  	const UINT stride = impl->device12->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
  	D3D12_CPU_DESCRIPTOR_HANDLE cpu = impl->descriptorHeap12->GetCPUDescriptorHandleForHeapStart();
  	D3D12_GPU_DESCRIPTOR_HANDLE gpu = impl->descriptorHeap12->GetGPUDescriptorHandleForHeapStart();
-@@ -370,10 +462,10 @@ bool FSR3Upscaler::Initialize(
+@@ -370,10 +469,10 @@ bool FSR3Upscaler::Initialize(
  	}
  	if (!enableOpticalFlow && !addAux(DXGI_FORMAT_R16G16_FLOAT, inputDesc.Width, inputDesc.Height,
  		impl->zeroMotion12, zero)) return false;
@@ -248,7 +264,7 @@ index b5d3677..fc13bb9 100644
  	impl->queue12->ExecuteCommandLists(1, lists);
  
  	hr = impl->device11->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(impl->fence11.put()));
-@@ -385,6 +477,12 @@ bool FSR3Upscaler::Initialize(
+@@ -385,6 +484,12 @@ bool FSR3Upscaler::Initialize(
  	hr = impl->device12->OpenSharedHandle(fenceHandle.get(), IID_PPV_ARGS(impl->fence12.put()));
  	if (FAILED(hr) || !WaitForQueue(*impl)) return false;
  
@@ -261,7 +277,7 @@ index b5d3677..fc13bb9 100644
  	if (useFsr4) {
  		impl->providerModule = LoadLibraryW(L"amd_fidelityfx_upscaler_dx12.dll");
  		if (!impl->providerModule) {
-@@ -486,60 +584,126 @@ bool FSR3Upscaler::Resize(DeviceResources& resources, ID3D11Texture2D* input,
+@@ -486,60 +591,124 @@ bool FSR3Upscaler::Resize(DeviceResources& resources, ID3D11Texture2D* input,
  	return Initialize(resources, input, output, _motionRequest, _useFsr4);
  }
  
@@ -277,7 +293,6 @@ index b5d3677..fc13bb9 100644
 +		Logger::Get().Error("Wait FSR3 D3D12 queue drain failed");
 +		return false;
 +	}
-+	for (Impl::Slot& slot : impl.slots) slot.pending = false;
 +	// Drain() 只等不补拷，契约见 docs/multislot.md §3.8 与 §4 F12：调用点是停流
 +	// （Renderer.cpp:3109-3121），而发布路径 Renderer.cpp:4614-4624 已对最后一帧做过
 +	// Signal + Flush + 等围栏，那一帧早就进呈现环交给系统了；Drain() 又没有目标纹理
@@ -307,16 +322,15 @@ index b5d3677..fc13bb9 100644
 +	// 认领槽：只等"自己的"岛。上游这里等的是上一帧；现在等的是 slots 次 Draw 之前提交的岛，
 +	// 稳态下 GetCompletedValue 直接放行（multislot.md §3.3 第 1 步）。
 +	const double waitBeginMs = NowMs();
-+	// §4 F13：按槽等待给 4000 ms 上界，超时一律 poison——设备挂死时宁可报错也不要无声卡住。
++	// §4 F13：只有这里传 4000 ms 上界（超时日志在 WaitForFence 内按 WAIT_TIMEOUT 打），
++	// 返回 false 一律 poison，让后续 Draw 快速失败而不是继续等一个不会完成的围栏。
 +	if (!WaitForFence(impl, slot.islandValue, kSlotWaitTimeoutMs)) {
 +		impl.failed = true;
 +		++impl.framesDropped;
-+		Logger::Get().Error(fmt::format(
-+			"Wait FSR3 slot island fence failed or timed out ({} ms)", kSlotWaitTimeoutMs));
++		Logger::Get().Error("Wait FSR3 slot island fence failed");
 +		return false;
 +	}
 +	impl.statSlotWaitMs += NowMs() - waitBeginMs;
-+	slot.pending = false;
 +
 +	impl.context11->CopyResource(slot.input11.get(), input);
  	if (impl.enableOpticalFlow) {
@@ -406,7 +420,7 @@ index b5d3677..fc13bb9 100644
  	desc.jitterOffset = { 0.0f, 0.0f };
  	desc.motionVectorScale = { 1.0f, 1.0f };
  	desc.renderSize = { impl.inputWidth, impl.inputHeight };
-@@ -559,6 +723,8 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -559,6 +728,8 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	}
  	const ffxReturnCode_t rc = impl.dispatch(&impl.context, &desc.header);
  	if (rc != FFX_API_RETURN_OK) {
@@ -415,7 +429,7 @@ index b5d3677..fc13bb9 100644
  		Logger::Get().Error(fmt::format("Dispatch {} failed ({})",
  			impl.useFsr4 ? "FSR 4.1.1" : "FSR 3.1.5", (uint32_t)rc));
  		return false;
-@@ -566,19 +732,62 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
+@@ -566,19 +737,60 @@ bool FSR3Upscaler::Draw(const NativeEffectDrawContext& drawContext) noexcept {
  	for (UINT i = 0; i < barrierCount; ++i) {
  		std::swap(barriers[i].Transition.StateBefore, barriers[i].Transition.StateAfter);
  	}
@@ -442,8 +456,6 @@ index b5d3677..fc13bb9 100644
 +	const uint64_t islandValue = ++impl.fenceValue;
 +	hr = impl.queue12->Signal(impl.fence12.get(), islandValue);
 +	slot.islandValue = islandValue;
-+	slot.pending = true;
-+	impl.lastSubmittedValue = islandValue;
 +	if (FAILED(hr)) {
 +		impl.failed = true;
 +		++impl.framesDropped;
@@ -474,7 +486,7 @@ index b5d3677..fc13bb9 100644
 +	++impl.statWindowDraws;
 +	if (impl.statWindowDraws >= kStatsInterval) {
 +		Logger::Get().Info(fmt::format(
-+			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} failed={} slots={} lag={}",
++			"fsr3-slot: draws={} slotWaitAvgMs={:.4f} islandValueLagAvg={:.2f} islandValueLagMax={} framesDropped={} slots={} lag={}",
 +			impl.drawSerial,
 +			impl.statSlotWaitMs / (double)impl.statWindowDraws,
 +			(double)impl.statIslandLagSum / (double)impl.statWindowDraws,
@@ -488,7 +500,7 @@ index b5d3677..fc13bb9 100644
  	return true;
  }
  
-@@ -596,6 +805,7 @@ bool FSR3Upscaler::Initialize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2
+@@ -596,6 +808,7 @@ bool FSR3Upscaler::Initialize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2
  }
  bool FSR3Upscaler::Resize(DeviceResources&, ID3D11Texture2D*, ID3D11Texture2D*) noexcept { return false; }
  bool FSR3Upscaler::Draw(const NativeEffectDrawContext&) noexcept { return false; }
