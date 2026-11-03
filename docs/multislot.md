@@ -258,31 +258,45 @@ Draw(ctx):
   slot = impl.slot[s]
 
   # ── 1. 认领槽：只等"自己的"岛 ────────────────────────────────
-  if (!WaitForFence(impl, slot.islandValue)) { impl.failed = true; return false }   # [CPU阻塞]
-     # 上游这里等的是"上一帧"；现在等的是"3 帧前的那一帧"，稳态下 GetCompletedValue 直接放行
+  if (!WaitForFence(impl, slot.islandValue, kSlotWaitTimeoutMs)) {                    # [CPU阻塞]
+      ++impl.framesDropped; impl.failed = true; log(超时 + removed); return false
+      # ★ 不走 FailFrame：超时说明队列已推不动，而 FailFrame 第 3 步的 WaitForQueue
+      #   内部是 WaitForFence(..., INFINITE)，会把"报错"变回"卡死"（F13）
+  }
+     # 上游等的是"上一帧的岛"；现在等的是"slack = slots − lag 个 Draw 之前那个岛"。
+     # slack 只在两处用到，别写死绝对帧数（三档实例见 §4 F4）。
 
   # ── 2. 拷入 ─────────────────────────────────────────────────
   context11->CopyResource(slot.input11, ctx.input)                                  # [录制]
   if (enableOpticalFlow) {
-     if (!frameGuidance.IsValidFor(...)) return false            # 与上游同位置、同语义
+     # 与上游 :500 同位置、同语义：guidance 失配是"本帧没有可用矢量"，return false 且**不 poison**
+     if (!frameGuidance.IsValidFor(...)) return false
      context11->Wait(sync.fence, sync.value)                                          # [GPU等待]
      context11->CopyResource(slot.motion11, guidance.motion.texture)                  # [录制]
   }
 
   inputReady = ++fenceValue
-  context11->Signal(fence11, inputReady)                                              # [录制]
+  hr = context11->Signal(fence11, inputReady)                                          # [录制]
+  if (FAILED(hr)) return FailFrame(impl, "d3d11 signal inputReady", hr)   # 可恢复，不 poison
   context11->Flush()                                                                  # [提交]
      # 注：I3 说明这里不需要额外的"等槽可写"的 GPU 守护——CPU 侧 §1 的等待 + 提交序已足够
 
   # ── 3. 岛的 GPU 侧入口 ──────────────────────────────────────
-  queue12->Wait(fence12, inputReady)                                                  # [GPU等待]
-  slot.allocator12->Reset(); slot.commandList12->Reset(slot.allocator12, nullptr)     # [CPU]
+  hr = queue12->Wait(fence12, inputReady)                                              # [GPU等待]
+  if (FAILED(hr)) return FailFrame(impl, "d3d12 queue wait", hr)
+  hr = slot.allocator12->Reset()                                                       # [CPU]
+  if (SUCCEEDED(hr)) hr = slot.commandList12->Reset(slot.allocator12, nullptr)
+  if (FAILED(hr)) return FailFrame(impl, "allocator/list reset", hr)
      # 安全：§1 已保证本槽自己的岛执行完，比上游"靠上一帧整体完成"更精确
   slot.commandList12->ResourceBarrier(per-slot 屏障)                                   # [录制]
-  ffxDispatch(desc{color=slot.input12, output=slot.output12, motion=slot.motion12…})   # [录制]
-  slot.commandList12->ResourceBarrier(反向屏障); Close()                               # [录制]
+  rc = ffxDispatch(desc{color=slot.input12, output=slot.output12, motion=slot.motion12…})  # [录制]
+  if (rc != FFX_API_RETURN_OK) return FailFrame(impl, "ffxDispatch", rc)  # 上游 :560-565 也是只 return
+  slot.commandList12->ResourceBarrier(反向屏障); hr = Close()
+  if (FAILED(hr)) return FailFrame(impl, "list close", hr)
   queue12->ExecuteCommandLists(1, {slot.commandList12})                                # [提交]
-  islandValue = ++fenceValue; queue12->Signal(fence12, islandValue)                    # [录制]
+  islandValue = ++fenceValue
+  hr = queue12->Signal(fence12, islandValue)                                           # [录制]
+  if (FAILED(hr)) return FailFrame(impl, "d3d12 signal island", hr)   # ★ 此时**不得**写 slot.islandValue
   slot.islandValue = islandValue; slot.pending = true; impl.lastSubmittedValue = islandValue
 
   # ── 4. 本帧就要结果（与上游一致）────────────────────────────
@@ -321,7 +335,9 @@ Draw(ctx):
   s = impl.drawSerial++ % impl.slots
   slot = impl.slot[s]
   assert(impl.results.empty() || impl.results.front().slotIndex != s)   # 见 §4 F4
-  if (!WaitForFence(impl, slot.islandValue)) { impl.failed = true; return false }   # [CPU阻塞]
+  if (!WaitForFence(impl, slot.islandValue, kSlotWaitTimeoutMs)) {                     # [CPU阻塞]
+      ++impl.framesDropped; impl.failed = true; log; return false    # 超时直接 poison，不走 FailFrame（F13）
+  }
   …（与 §3.3 的 2、3 两步完全相同：拷入 → inputReady → 屏障 → dispatch → islandValue）…
   impl.results.push_back({s, islandValue, impl.drawSerial})
 
@@ -411,7 +427,8 @@ prev/current 配对整体平移，理论上是自洽的（配对差仍是相邻�
 
 `NativeEffectBackend` 已经有现成的收尾契约：虚函数 `Drain()`（`NativeEffectBackend.h:47`），
 由 `Renderer::_DrainNgxConsumers`（`Renderer.cpp:3109-3121`）在**停流时**对每个 backend 调用
-（不是每帧），失败会打 `Drain native NGX backend queue failed`。`FSR3Upscaler` 目前**没有覆盖它**。
+（不是每帧），失败会打 `Drain native NGX backend queue failed`。**上游没有覆盖它；补丁新增覆盖
+（契约见 F12）。**
 
 **`Drain()` 只等不补拷。** 三条理由（均【源码】）：
 
@@ -429,12 +446,15 @@ Drain():
   WaitForQueue(*_impl)                       # D3D12 队列排空（等价于等所有槽的 islandValue）
   const size_t dropped = _impl->results.size()
   _impl->results.clear()                     # 清空结果 FIFO：lag=1 时通常剩 1 条
-  context11->Flush()                         # 交出 D3D11 侧仍排队的工作
   Logger::Get().Info(fmt::format(
       "fsr3-slot: drain islands={} results={}",
       _impl->drawSerial, dropped))   # 每个 Draw 恰好提交一个岛，故 drawSerial 即岛数
   return true
 ```
+
+**不调 `Flush()`**：`WaitForQueue` 已排空 D3D12 侧，`Flush` 既不改变这里的等待语义，也不解决
+"共享纹理仍被 D3D11 命令引用"这个残留——上游 `~Impl` 同样只 `WaitForQueue`，这笔账本来就存在，
+不在本次补齐的范围。
 
 要点：**必须等所有已提交的岛完成**（不是"直接返回"），否则析构/停流会释放仍被 GPU 引用的
 共享纹理；**必须清空** `results` 并把丢了几帧写进日志，不许静默保留 pending 结果；
@@ -488,18 +508,49 @@ ZeroMV 那条路径**保持单槽**。原因：ZeroMV 变体在链里不承载 N
 | F1 | 围栏值单调（§3.2 I1） | 每次 `++` 在提交序上 | `GetCompletedValue` 快速放行 → 读到未写完的纹理（花屏） |
 | F2 | 等待图无环（§3.2 I2） | D3D11 只等"前置信号已入队"的值 | 死锁（`WaitForFence` 无限等，`:68`） |
 | F3 | 每岛一次 `queue12->Wait(inputReady)` 兼作输出侧守护（§3.2 I3） | 必须保留 | 隔帧复用槽时 D3D12 写与 D3D11 读相撞 |
-| F4 | **槽复用年龄 `slack = slots − lag ≥ 1`** | `lag=1 ⇒ slots ≥ 2`；`slots ≥ 3` 时 slack=2 才有"CPU 不阻塞"的余量 | `slack=0` → 同帧同槽既收割又提交 → 数据错乱；`slack=1` → 岛超一帧就退回 CPU 阻塞 |
+| F4 | **槽复用年龄 `slack = slots − lag ≥ 1`** | `lag=1 ⇒ slots ≥ 2`；`slots ≥ 3` 时 slack=2 才有"CPU 不阻塞"的余量。三档实例：`(3,0)` → 认领帧 N 时等 N−3、无收割；`(3,1)` → 等 N−3，且 N−1 的岛已在本帧开头收割；`(2,1)` → 等 N−2 | `slack=0` → 同帧同槽既收割又提交 → 数据错乱；`slack=1` → 岛超一帧就退回 CPU 阻塞 |
 | F5 | **首帧 / Resize 后无历史可拷出** | 冷启动退回同步语义，接受**一帧重复**（U(1) 出现两次） | 不处理 → 呈现一帧未初始化纹理（黑帧/花屏） |
 | F6 | `resetHistory` / `isNewCaptureFrame` / frameGuidance reset | **不改语义**：reset 仍只作用于本帧提交的岛（`desc.reset` 就地消费，`:551`/`:580`） | 改错 → 每帧复位历史 → 场景局部闪烁（`findings.md` 判据） |
-| F7 | `Draw` 返回 false 后的状态一致性 | 任何在"认领槽之后"的失败 → `impl.failed = true`，之后每次 `Draw` 立即返回 false，`results` 清空；主机侧不会崩：`!nativeDrawSucceeded` 时改走标记 pass 产出可见占位（`Renderer.cpp:4166-4174`），NR 状态下记 `DlssNrState::Stopped`（`:4122-4132`） | 继续按旧槽值提交 → 提交到已失效的 allocator（D3D12 会 latch `E_INVALIDARG` 并污染整个设备，`mochinr.cpp:787` 的注释是同一类教训） |
-| F8 | 设备移除 `0x887A0005` / `0x887A0001` | `Reset`/`Close`/`ExecuteCommandLists` 任一返回即置 `failed`，**不在本类内自愈**；`ComError` 记一次 | 自愈会重演"停效果组再启用"的引用计数红字（`findings.md` 未解问题 3） |
+| F7 | `Draw` 返回 false 后的状态一致性（**三段式**，详见下方注） | ① **可恢复失败不 poison**（**超时除外**，见 F13）：`Reset`/`Close`/`Signal`/`context11->Wait`/`ffxDispatch` 失败 → `++framesDropped` + 一行含 `HRESULT` 与 `GetDeviceRemovedReason()` 的日志 → `return false`；② **只有** `device12->GetDeviceRemovedReason() != S_OK`、或重对齐用的 `WaitForQueue` 本身失败，才 `failed = true`；③ 失败后**先 `WaitForQueue` 重对齐**再返回，且 `slot.islandValue` **只在 `Signal` 成功之后**才写入 | ① 若沿用"一律粘滞"：宿主在 `nr == false` 时只退化一帧（`Renderer.cpp:4153-4181`），下一帧照样调 `Draw()` → backend 永久失效、逐帧刷 `Native effect Draw failed`（120 fps 下日志爆且掩盖首因）；③ 若省掉重对齐或提前写了 `islandValue`：下一帧认领该槽会等一个**永不 signal** 的值，而 `WaitForFence` 是 `INFINITE` → 真死锁 |
+| F8 | 设备移除 `0x887A0005` / `0x887A0001` | **只有** `device12->GetDeviceRemovedReason() != S_OK` 才置 `failed`（F7 ②）；单看某个调用的 HRESULT 不够——`Reset` 在正常路径也可能失败一次。置 `failed` 后**不在本类内自愈**，`ComError` 记一次 | 按 HRESULT 猜移除 → 一次可恢复失败被判成永久失效（F16）；自愈则会重演"停效果组再启用"的引用计数红字（`findings.md` 未解问题 3） |
 | F9 | 无 NR（只有 `FSR4_SR`）与只开补帧路径 | 不得回归：`slots=3, lag=0` 时行为等价；快路径（无 optical flow、`barrierCount=2`）逐字保留 | 回归即判定阶段 1 失败，回滚 |
 | F10 | **FG 与 `lag=1` 的组合** | `lag=1` 下输出像素是 `U(N-1)`，但 `ctx.output` 是**整条下游链的输入**（`Renderer.cpp:4110`/`:4121`，见 §3.7），下游拿到的是"旧图像 + 本帧元数据"（`Renderer.cpp:4565-4598`） | 元数据与内容错位一帧：HDR 元数据突变时可见；FG 用本帧矢量插值上一帧颜色 → **待测**，见 §6.4 与 B9 |
 | F11 | `mochinr` 的 `inflight` 门 | 必须 `inflight ≥ slots + lag`（3 槽+lag1 → **≥4**），部署包当前为 2（`mochinr.cpp:877-895`） | 门在岛的提交路径中间做 **CPU 阻塞等待（≤200 ms）**，阶段 2 会在这里被限流，表现为"改了但没变" |
 | F12 | 收尾契约：`Drain()` 只等不补拷 | **必须**等所有已提交岛完成并清空结果 FIFO，并以 `fsr3-slot: drain islands=<n> results=<m>` 记录丢弃帧数（§3.8）。主机在停流时对每个 backend 调用（`Renderer.cpp:3109-3121`） | 不得静默保留 pending 结果（会漏掉"丢了几帧"这个证据），也**不得写入已发布的 `ctx.output`**（`Renderer.cpp:4614-4624` 已把最后一帧交出去，补拷是零收益且新增悬空指针路径）；反过来若不等就返回，析构会释放仍被 GPU 引用的纹理 |
-| F13 | `WaitForFence` 超时 | 仅 Draw 内新增的按槽等待加 4000 ms 上界（对齐 `mochinr.cpp` 的 `WaitSlot`），超时置 `failed`；`~Impl` 路径保持无限 | 设备挂死时会表现为"卡死而不是报错" |
+| F13 | `WaitForFence` 超时（**本表唯一的例外**） | 只有"认领槽"的等待加 4000 ms 上界（对齐 `mochinr.cpp` 的 `WaitSlot`）；**超时 → 直接 `failed = true` + `++framesDropped` + 日志，不走 `FailFrame`、不调 `WaitForQueue`**；`~Impl` / `Drain` 路径保持 `INFINITE` | 依据：围栏 4 s 不完成已属"本会话不可恢复"，而 `WaitForQueue` 内部就是 `WaitForFence(..., INFINITE)`（上游 `:72-77` → `:68`）——重对齐的前提是队列还能推进，超时恰恰说明它不能。**反向说明**：若按 F7 ③ 走 `FailFrame`，会把"报错"变回"卡死"，且卡在 `WaitForQueue` 内部——日志里已有超时行、进程却不退，比不改更难排查 |
 | F14 | 范围边界：`FSR3ZeroMVUpscaler` | 保持单槽，本次不改（§3.10） | 以后误判"已统一"，或补丁被意外扩散到同构文件 |
 | F15 | 运行时内部串行 | 若 `mochinr`/运行时内部把两个岛串起来，多槽收益归零；判据是 `perf:` 行的 `waits=` 随槽数上升（§3.9、§8 Q2） | 归属错误：会去改宿主，实际限流点在运行时 |
+| F16 | **失败一帧 ≠ 会话失效** | 除设备移除**与认领超时**（F13）外的任何**单帧**失败，都不得让 backend 永久失效（机制见 F7）。理由：`FSR4\FSR4_SR` 的 `nr == false`，宿主只把这一帧降级成 marker pass 并**继续调 `Draw()`**（`Renderer.cpp:4153-4181`）；若我们粘滞，宿主会逐帧打 `Native effect Draw failed`（120 fps 下日志爆、首因被淹）。超时之所以例外：那时 GPU 队列已经推不动，重试没有意义（F13） | 粘滞失败＝回归；外在表现是"必须 Resize / 改设置 / 重启才恢复"（与 `findings.md` 未解问题 4 同一类症状，容易被误诊成运行时停机） |
+
+> **F7 的失败契约（三段式）**——上游 `ffxDispatch` 失败也只 `return false`（`FSR3Upscaler.cpp:560-565`），
+> 宿主则把 `!nativeDrawSucceeded` 降级成 marker pass、**不销毁 backend**、下一帧继续调 `Draw()`
+> （`Renderer.cpp:4153-4181`，注释原文 `fallback=marker-pass`）。所以"这一帧失败、下一帧重试"是
+> **宿主的既有契约**，粘滞失败是回归（F16）。
+>
+> ```
+> FailFrame(impl, stage, hr) -> bool(false):
+>   ++impl.framesDropped
+>   removed = impl.device12->GetDeviceRemovedReason()
+>   Logger::Get().Warn(fmt::format(
+>       "fsr3-slot: frame dropped at {} hr=0x{:08X} removed=0x{:08X} draws={}",
+>       stage, (uint32_t)hr, (uint32_t)removed, impl.drawSerial))
+>   if (removed != S_OK)          { impl.failed = true; return false }   # 只有设备移除才粘滞
+>   if (!WaitForQueue(*impl))     { impl.failed = true; return false }   # 重对齐都失败=真没救
+>   return false                                                          # 宿主退化一帧，下一帧重试
+> ```
+>
+> 两条保护缺一不可：**(a)** `slot.islandValue` 只在 `Signal` 成功之后写，失败时该槽仍指向上一次
+> 已完成的岛，下一帧的等待立即放行；**(b)** `FailFrame` 里的 `WaitForQueue` 会 `Signal(++fenceValue)`
+> 并等到它完成，把"已经 `++` 但没入队成功"的值甩到已完成值以下（§3.2 I1 的单调性保证这一点）。
+> 只做 (a) 而队列处于未知状态时仍可能残留未完成的工作；(a)+(b) 一起才能既不死锁也不泄漏。
+> **`FailFrame` 的适用范围**：只用于"已返回 `HRESULT` 且**不是超时**"的失败
+> （`Signal` / `context11->Wait` / `queue12->Wait` / `Reset` / `Close` / `ffxDispatch`）——这些的
+> `WaitForQueue` 重对齐有前提保证：队列自身还能推进。**超时是唯一例外**（F13）：直接 poison，
+> 不进 `FailFrame`、不调 `WaitForQueue`。
+>
+> 伪代码里的 `hr` 指该步的 `HRESULT`：`WaitForFence` 目前只返回 `bool`（`:61-70`），把内部 `HRESULT`
+> 带出来**仅供日志，不影响控制流**——不要为了拿 HRESULT 去改它的返回类型，更不要把"超时"与
+> "`HRESULT` 失败"合并成一条路径（那正是 F13 要分开的两件事）。
 
 > F5 的"一帧重复"值得单独说：开局/Resize 后第 1、2 帧显示同一内容，是一次 ~8–20 ms 的画面静止，
 > 不是"未降噪帧"，也不会重复发生。**由此定一条实现纪律：`OUTPUT_LAG` 只在 `Initialize` 读一次，
@@ -516,31 +567,52 @@ ZeroMV 那条路径**保持单槽**。原因：ZeroMV 变体在链里不承载 N
 | `MAGPIE_FSR_SLOTS` | **3** | 1–4 | 环形槽数。`1` = 完全回到上游行为（含单 allocator） |
 | `MAGPIE_FSR_OUTPUT_LAG` | **0** | 0–1 | `0` = 本帧输入本帧输出；`1` = 晚一帧（阶段 2） |
 
-约束在 `Initialize` 里落地并**修正而非报错**：`lag=1 && slots=1 → slots=2`；非法值回落到默认。
-生效值打一行到 `magpie.log`：
+约束在 `Initialize` 里落地并**修正而非报错**（**以下以补丁代码为准**）：
+
+| 输入 | 行为 |
+|---|---|
+| `MAGPIE_FSR_SLOTS` 缺失 / 0 / 非数字 | 回落 `kDefaultSlots = 3` |
+| `MAGPIE_FSR_SLOTS > kMaxSlots(4)` | 夹到 4，并 `Warn` 一行 `exceeds the supported maximum` |
+| `MAGPIE_FSR_OUTPUT_LAG > 1` | 记 `Warn`（`out of range [0,1]; using 0`），用 **0** |
+| `lag=1` 且 `slots<2` | 记 `Warn`（`requires at least 2 slots; falling back to lag 0`），**把 lag 夹回 0**——不抬 slots（早期写法"自动抬到 2"已作废，会改显存预算） |
+
+生效值是一行（代码原文）：
 
 ```
-FSR3 slot ring: slots=3 outputLag=0 (from MAGPIE_FSR_SLOTS/MAGPIE_FSR_OUTPUT_LAG)
+FSR3 slot ring: slots=3 lag=0
 ```
 
-再加一行统计（每 120 个 Draw 一次，与主机 `Backend publication CPU timing` 同频，便于对齐）：
+每 `kStatsInterval = 120` 次 Draw 一行统计（与主机 `Backend publication CPU timing` 同频，便于对齐）。
+**字段以下面为准，`0001` 与 `0002` 略有差异**：
 
 ```
-FSR3 ring stats: draws=120 slotWaitAvgMs=0.004 harvestMiss=0/120 lag=1 slots=3 framesDropped=0
+# 0001（lag 恒 0）
+fsr3-slot: draws=120 slotWaitAvgMs=0.0041 islandValueLagAvg=2.00 islandValueLagMax=3 failed=0 slots=3 lag=0
+# 0002（多出 harvestMiss=m/t）
+fsr3-slot: draws=120 slotWaitAvgMs=0.0041 islandValueLagAvg=2.00 islandValueLagMax=3 harvestMiss=0/120 failed=0 slots=3 lag=1
 ```
 
-- `slotWaitAvgMs`：§3.3 第 1 步 / §3.4 B 步那个 CPU 等待的均值。**阶段 1 的核心读数**（应 →0）。
-- `harvestMiss`：收割时岛还没完成的次数。**阶段 2 的核心读数**（应 →0，>5% 说明岛比帧间隔长）。
-- `framesDropped`：`Draw` 返回 false 的次数（应为 0）。
+| 字段 | 含义 | 用途 |
+|---|---|---|
+| `draws` | 累计 Draw 数（与 `drain islands=` 同源） | 对齐 |
+| `slotWaitAvgMs` | §3.3 第 1 步 / §3.4 B 步那个 CPU 等待的均值 | **阶段 1 的核心读数**，应 →0 |
+| `islandValueLagAvg` / `islandValueLagMax` | 提交瞬间"已提交 − 已完成"的**围栏值**差（每个岛占 2 个值） | 健康度：稳态应在 `2×(slots−1)` 以内（`slots=3` → 上限 4，预期落在 2 附近【待测】）；突然变大说明岛变慢 |
+| `harvestMiss=m/t` | 收割时岛还没完成的次数 / 窗口 Draw 数（仅 0002） | **阶段 2 的核心读数**，应 <5% |
+| `failed` | `framesDropped` 计数——`Draw` 返回 false 的次数（不是布尔） | 偶发 1–2 次是可恢复失败（F16），应下一帧自愈；**持续增长**才是问题（A6） |
+| `slots` / `lag` | 生效值 | 对齐配置 |
 
-停流时另有一行（只打一次，`Drain()` 里）：
+停流时另有一行（`Drain()` 里，只打一次）：
 
 ```
 fsr3-slot: drain islands=6431 results=1
 ```
 
-- `results` 是收尾时被清空的结果 FIFO 长度，`lag=1` 应为 1（`lag=0` 为 0）。**它是"最后一帧按
-  延迟语义丢掉"的唯一证据**，也是 B10 的判据；`Drain()` 不做补拷（§3.8）。
+- `results` 是收尾时被清空的结果 FIFO 长度，`lag=1` 应为 1（`lag=0` 时 0001 直接打 `results=0`）。
+  **它是"最后一帧按延迟语义丢掉"的唯一证据**，也是 B10 的判据；`Drain()` 不做补拷（§3.8）。
+
+**为什么禁止运行期切换 `MAGPIE_FSR_OUTPUT_LAG`**：`lag=1` 的冷启动第 1 帧结果 FIFO 为空，只能退回
+同步语义（§4 F5），于是第 1、2 帧是同内容——一次约 8–20 ms 的画面静止。运行期切换会把这次静止
+挪到任意时刻（用户正在看画面的中途），而 `Initialize`/`Resize` 时它至少发生在可预期的位置。
 
 `Resize()` 走 `Initialize()`，因此会重新读环境变量并重建槽环（顺带再吃一次 F5 的一帧重复）。
 
@@ -550,15 +622,25 @@ fsr3-slot: drain islands=6431 results=1
 
 前置：G0（§2.3）已通过。以下每条都要有"通过线"和"记失败"两档。
 
+**基线定义（本节所有"与基线比"都指它）**：**上游未打补丁的构建**——`6940f84` 直接编译出的
+Magpie，不设任何环境变量。**打了补丁的 `slots=1, lag=0` 构建不是基线**：它是"应当与基线相同"的
+待验对象（§1.3 的断言正是这一条）。拿补丁内的两个配置互比，只能证明"槽数无关"，不能证明
+"未改变上游行为"——这是两条不同的结论，不能共用一个判据。
+
 ### 6.1 阶段 1（`slots=3, lag=0`）
 
 | # | 指标 | 通过线 | 记失败 |
 |---|---|---|---|
-| A1 | 语义等价 | 输出帧号与 `slots=1` 一致；`reset` 序列一致；`magpie.log`/`mochinr.log` 无新增 warning | 出现新的 `E_INVALIDARG`/`DEVICE_REMOVED` |
-| A2 | **性能：应当不变** | 平衡点与 `slots=1` 差 ≤ ±1 fps；`fenceAvgMs` 差 ≤ 0.3 ms；`slotWaitAvgMs ≤ 0.05` | 掉 ≥3 fps（说明槽环引入了新等待） |
-| A3 | 画质 | 静态场景（暂停游戏）连续 200 帧与 `slots=1` **逐位一致** | 任何一帧不一致 → 并发/复用协议错 |
+| A1 | 语义等价 | 输出帧号与**基线**一致；`reset` 序列一致；`magpie.log`/`mochinr.log` 无新增 warning | 出现新的 `E_INVALIDARG`/`DEVICE_REMOVED` |
+| A2 | **性能：应当不变** | 平衡点与**基线**差 ≤ ±1 fps；`fenceAvgMs` 差 ≤ 0.3 ms；`fsr3-slot:` 行 `slotWaitAvgMs ≤ 0.05` | 掉 ≥3 fps（说明槽环引入了新等待） |
+| A3 | 画质 | 静态场景（暂停游戏）连续 200 帧与**基线**逐位一致 | 任何一帧不一致 → 并发/复用协议错 |
 | A4 | 稳定性 | 30 min，s=0.5，无 TDR；显存增长 < 50 MB | — |
 | A5 | 无 NR 路径 | 仅 `FSR4_SR`（禁用 mochinr）跑 60 s，平衡点 ≥ 123 fps 且无新错误 | 掉到 118 以下 |
+| A6 | **失败可恢复（F16）** | 注入一次单帧失败后，NR 在**下一帧**恢复：帧率回到注入前、`fsr3-slot:` 行的 `failed=` 不再增长、无持续 `Native effect Draw failed` 刷屏、**不需要 Resize / 改设置 / 重启** | `failed` 持续增长，或必须重启/Resize 才恢复 → 粘滞失败，违反 F7/F16 |
+
+> A6 的注入方式：在**本地调试构建**里让第一次 `ffxDispatch` 返回非 `FFX_API_RETURN_OK`（仅用于本次
+> 验证，**不进补丁**）；也可以现场消费 `mochinr` 偶发失败产生的真实记录。
+> 判据只看两处：`fsr3-slot:` 行的 `failed=` 与 `magpie.log` 里 `Native effect Draw failed` 是否**停止**。
 
 > A2 的"应当不变"是**设计断言**（§1.3）。若实测显著变好，那是意外发现，先记录、不要急着庆祝：
 > 更可能的解释是 G0 的 `busy` 与预期不符。
@@ -571,8 +653,8 @@ fsr3-slot: drain islands=6431 results=1
 | B2 | **0.5 档**（主验证点） | ≥ 118 fps（B2 天花板 123–125 的 95%） | < 108 fps（即没超过现状 90 的 1.2 倍） |
 | B3 | **0.35 档** | ≥ 118 fps | < 108 |
 | B4 | **1.0 档** | ≥ 63 fps（模型 66、roadmap 70，取 63 留残差） | < 55 fps |
-| B5 | `fenceAvgMs` | 相对阶段 1 至少降 1 档岛的 80%（0.5 档：应降到 ≈4.5±1；参照点：NR 全关、125 fps 时 `fenceAvgMs` 实测 4.2，见 `measurements.md` §2） | 不降 → 岛仍留在 D3D11 队列里，补丁没生效 |
-| B6 | 画质 | 与 `slots=1/lag=0` 逐帧平均绝对差 ≤ 噪声基准；**无"整帧未降噪"**（全屏闪烁判据：`findings.md` §2026-10-31 补充） | 出现全屏闪烁 ≈ 步了 `BridgePace=0` 的后尘 |
+| B5 | "岛已移出 D3D11 队列"的证据 | 三量同时成立：① `fsr3-slot:` 行 `harvestMiss/draws < 5%`；② 同 `slotWaitAvgMs ≤ 0.05`（与 A2 同阈，落在噪声内）；③ `magpie.log` 的 `fenceAvgMs` 比阶段 1 至少降 1 档岛的 80%（0.5 档应到 ≈4.5±1；参照点：NR 全关、125 fps 实测 4.2，见 `measurements.md` §2） | ① >20%、或 ③ 不降 → 岛仍留在 D3D11 队列里，补丁没生效 |
+| B6 | 画质 | 与**基线**逐帧平均绝对差 ≤ 噪声基准；**无"整帧未降噪"**（全屏闪烁判据：`findings.md` §2026-10-31 补充） | 出现全屏闪烁 ≈ 步了 `BridgePace=0` 的后尘 |
 | B7 | 延迟 | 文档明示 +1 帧（s=1.0 时 ≈ +21 ms，s=0.5 时 ≈ +8 ms） | — |
 | B8 | 稳定性 | 30 min，s=0.5，`inflight=4`，无 TDR | — |
 | B9 | FG 交互 | `lag=1` + FG 2x 长跑 10 min：无抖动、生成帧无错位 | 出现插值抖动 → FG 下 `lag` 强制 0 |
@@ -616,34 +698,36 @@ prev/current 配对整体平移"理论自洽、实际待验"。
 
 ## 7. 实施拆分
 
-补丁一律落在 `repo/src/magpie-patches/`（该目录**当前不存在，需新建**），构建/测量脚本落在
-`repo/scripts/`。与 `src/opennr-patches/opennr-0.7.15-magpie-nr.patch` 同一惯例：
-**只入库补丁文本与说明，不分发宿主源码**；补丁头写清上游仓库、分支、基准提交 `6940f84`，
-用 `git format-patch` 生成（`git diff` 亦可，但要在说明里写明应用命令）。
+补丁一律落在 `repo/src/magpie-patches/`，构建/测量脚本落在 `repo/scripts/`。与
+`src/opennr-patches/opennr-0.7.15-magpie-nr.patch` 同一惯例：**只入库补丁文本与说明，
+不分发宿主源码**；补丁头写清上游仓库、分支、基准提交 `6940f84` 与 `git apply` 命令。
 
-### 7.1 文件清单
+**宿主构建不在本仓库出脚本**：Magpie fork 用宿主自带的 `scripts/Build-Release.ps1`
+（`docs/build.md` 已有这套流程），本仓库只负责应用补丁与采集数据。
 
-| 文件 | 作用 |
-|---|---|
-| `src/magpie-patches/README.md` | 基准提交、应用/回退命令、编译开关（`MP_ENABLE_FSR3_ZEROMV`）、许可说明、与 `mochinr` 的 `inflight` 联动 |
-| `src/magpie-patches/0001-fsr3-slot-ring.patch` | 阶段 1：槽位结构 + 每槽围栏 + 日志行 + `Drain()` |
-| `src/magpie-patches/0002-fsr3-output-lag.patch` | 阶段 2：结果 FIFO + `OUTPUT_LAG` + `harvestMiss` + 冷启动同步回退（`Drain()` 已在 0001 落地，只多清一条 FIFO） |
-| `scripts/apply-magpie-patches.ps1` | 克隆/校验 `6940f84` → 依次 `git apply` → 冲突时明确报错不猜 |
-| `scripts/build-magpie-fork.ps1` | 在打补丁的 fork 上出 `Magpie.exe`（独立于 `build-all.ps1`，因为宿主不是本仓库组件） |
-| `scripts/measure-gpu-busy.ps1` | G0：按 PID 采 `\GPU Engine(*)` 计数器，输出 `busy`/`frame_time`/`Copy` 占比 |
-| `scripts/measure-fsr-ring.ps1` | 三档（1.0/0.5/0.35）× 三配置（slots=1 / slots=3lag0 / slots=3lag1）跑批 + 抓日志判据 |
-| `tools/slot_model.py` | 求和/取大两套模型的调度仿真：输入往返时间分布，输出预测 fps 与 `harvestMiss` 期望 |
-| `tools/README.md` | 仿真的输入口径与"怎么用实测反推参数" |
+### 7.1 文件清单（与实际目录一致）
+
+| 文件 | 作用 | 状态 |
+|---|---|---|
+| `src/magpie-patches/README.md` | 基准提交、应用/回退命令、编译开关（`MP_ENABLE_FSR3_ZEROMV`）、许可说明、与 `mochinr` 的 `inflight` 联动 | 已存在 |
+| `src/magpie-patches/0001-fsr3-slot-ring.patch` | 阶段 1：槽位结构 + 每槽围栏 + 两行日志 + `Drain()`（只等不补拷） | 已存在 |
+| `src/magpie-patches/0002-fsr3-output-lag.patch` | 阶段 2：结果 FIFO + `OUTPUT_LAG` + `harvestMiss` + 冷启动同步回退（`Drain()` 已在 0001 落地，只多清一条 FIFO） | 已存在 |
+| `scripts/apply-magpie-patch.ps1` | 校验 `6940f84` → 依次 `git apply` → 冲突时明确报错不猜 | 已存在 |
+| `scripts/measure-gpu-busy.ps1` | G0：按 PID 采 `\GPU Engine(*)` 计数器，输出 `busy_per_frame` / `frame_time` / `ratio` / `Copy` 占比（口径见 §2.3） | 已存在 |
+| `tools/slot_model.py` | 求和/取大两套模型的调度仿真：输入往返时间，输出预测 fps 与 `harvestMiss` 期望 | 已存在 |
+| `tools/test_slot_model.py` | 上者的自测（回归用） | 已存在 |
+| `tools/README.md` | 工具分工、仿真输入口径、"怎么用实测反推参数" | **待落盘（T04）** |
+| `scripts/measure-fsr-ring.ps1` | **只做采集与汇总**：读现有日志/计数器、按 §6 判据出通过/失败表。**不启动或重启 Magpie、不改 config、不改环境变量** | **待落盘（T05）** |
 
 ### 7.2 任务列表（有序，含依赖）
 
 | ID | 任务 | 源文件 | 依赖 | 优先级 |
 |---|---|---|---|---|
-| **T01** | 补丁工程与 G0 判别工具：建 `src/magpie-patches/`，写 README/应用脚本/构建脚本/GPU 忙采集脚本。**不含任何源码改动**，产出可先跑 G0 | `src/magpie-patches/README.md`、`scripts/apply-magpie-patches.ps1`、`scripts/build-magpie-fork.ps1`、`scripts/measure-gpu-busy.ps1` | — | **P0** |
+| **T01** | 补丁工程与 G0 判别工具：`src/magpie-patches/`（README + 应用脚本）+ GPU 忙采集脚本。**不含任何源码改动**，产出可先跑 G0 | `src/magpie-patches/README.md`、`scripts/apply-magpie-patch.ps1`、`scripts/measure-gpu-busy.ps1` | — | **P0** |
 | **T02** | 阶段 1 补丁：`Slot` 结构、槽环创建、每槽 allocator/list、按槽围栏、`MAGPIE_FSR_SLOTS`、两行日志、`Drain()` 等槽基线（只等不补拷，§3.8）、`~Impl` | `src/magpie-patches/0001-fsr3-slot-ring.patch`（改 `FSR3Upscaler.cpp`、`FSR3Upscaler.h`）＋ 在本文 §6.1 追加实测记录 | T01 | **P0** |
 | **T03** | 阶段 2 补丁：输出晚一帧（结果 FIFO + `MAGPIE_FSR_OUTPUT_LAG` + `harvestMiss` + 冷启动同步回退）。**不含 `Drain()` 改动**——阶段 2 只需要 `Drain()` 多清一条 FIFO，基线已在 T02 交付 | `src/magpie-patches/0002-fsr3-output-lag.patch`（同上两文件）＋ 本文 §6.2 追加实测记录 | T02 | **P0** |
-| **T04** | 调度模型仿真：把 §0.3 的求和/取大、§4 F4 的 `slack`、§6.2 B1 的 `harvestMiss` 判据写成可跑脚本，输入实测五点做校验 | `tools/slot_model.py`、`tools/README.md` | T01（可与 T02/T03 并行） | **P1** |
-| **T05** | 跑批与判据汇总：三档三配置的批处理、日志解析、自动给出 §6 的通过/失败表 | `scripts/measure-fsr-ring.ps1`、`tools/README.md`（判据段） | T02、T03 | **P1** |
+| **T04** | 调度模型仿真：把 §0.3 的求和/取大、§4 F4 的 `slack`、§6.2 B1 的 `harvestMiss` 判据写成可跑脚本，输入实测五点做校验 | `tools/slot_model.py`、`tools/test_slot_model.py`、`tools/README.md` | T01（可与 T02/T03 并行） | **P1** |
+| **T05** | 采集与判据汇总：按 §6 从日志/计数器出通过失败表。**不启动/不重启 Magpie、不改 config** | `scripts/measure-fsr-ring.ps1`、`tools/README.md`（判据段） | T02、T03 | **P1** |
 
 **为什么 T02 不能再拆**：`Slot` 结构、槽环创建、allocator/list 重置点、围栏记账四件事互相咬死
 （少一个就是脏读或死锁），拆开交付没有可验证的中间态。T03 必须叠在 T02 之上（同一个文件、
@@ -659,7 +743,8 @@ prev/current 配对整体平移"理论自洽、实际待验"。
 - 不改 FSR3ZeroMVUpscaler.cpp（§3.10：同构实现，本次保持单槽）
 - 补丁必须能在 `6940f84` 上 `git apply` 成功；若上游漂移，先 rebase 补丁再谈功能
 - 所有新增资源在 Initialize 内按 slots 一次建齐，运行期不分配
-- 失败即 poisoned（§4 F7），不做局部重试
+- 单帧失败按 F7 三段式处理：可恢复的 `return FailFrame(...)`（不 poison）、只有设备移除才 poison；
+  guidance 失配直接 `return false`（与上游同语义）
 - `Drain()` 是收尾的唯一出口：等完所有已提交的岛、清结果 FIFO、打 `drain` 行；不补拷、不静默（§3.8、F12）
 ```
 

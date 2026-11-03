@@ -265,8 +265,6 @@ if ($LogPath) {
 }
 
 # --- 汇总 ------------------------------------------------------------------
-# 在 if 外初始化：末尾的退出码要读它，而 StrictMode 下未定义的变量会直接报错。
-$failures = 0
 if ($Summary) {
     if (-not (Test-Path $OutCsv)) {
         Write-Host "要汇总的 CSV 不存在：$OutCsv" -ForegroundColor Red
