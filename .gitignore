@@ -25,3 +25,7 @@ config/config.json.bak-*
 .vs/
 .vscode/
 *.user
+
+# shim 探针的临时构建目录
+_selftest/
+_abi/
