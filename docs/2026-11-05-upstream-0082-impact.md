@@ -16,7 +16,7 @@
 |---|---|---|
 | 1 | **上游 v0.0.8.2 不提供可替换我们运行时的二进制。** 它发行 `dlssnr-amd.asi`（OptiScaler 插件）/ `dlssnr_amd.addon64`（ReShade 插件）/ `_nvngx.dll`（OptiScaler-NR 的 NGX core），全仓库无 `MochiNrGetApi` / `LmxxfNrGetApi` / `MochiNrApi.h` 的任何字样 | §3.1【源码】对 v0.0.8.2 源码包（1203 文件）全量 grep，0 命中 |
 | 2 | **"最新的 mochizuki 权重"我们已经有了，逐字节相同。** `dlssnr-small.bin` / `dlssnr.bin` / `dlssnr-int4.bin` 三个 SHA256 与上游 v0.0.8.2 `install.ps1` 内置常量**完全一致**；int4 标定表 279/279 文件一致 | §2.2【实测】逐文件 SHA256 比对 |
-| 3 | **上游 v0.0.8.2 的运行时（`nr_runtime.cpp`）与我们手上的运行时是两个分支**，不是版本前后关系。我们那份带 `NR_KEEP_RGBA32F`（上游 0.0.8.1/0.0.8.2 都没有）、不带 `CC_SMALL_FP8_EXPERIMENTAL`、不带 `lazy-images`/`materialize`/`make_noise`/`switch_history` | §3.2【实测】二进制字符串比对 |
+| 3 | **上游 v0.0.8.2 的运行时（`nr_runtime.cpp` + `nr_graph.cpp`）与我们手上的运行时是两个分支**，不是版本前后关系。我们那份带 `NR_KEEP_RGBA32F`（上游 0.0.8.1/0.0.8.2 都没有）、不带 `CC_SMALL_FP8_EXPERIMENTAL`、不带 `lazy-images`/`materialize`/`make_noise`/`switch_history`，图/plan 层也只有 arena 复用的早期形态（缺 0.0.8.2 的死槽消除） | §3.2【实测】二进制字符串比对 |
 | 4 | **帧时间收益 ≈ 0，且不是我们能拿的。** 上游 4K network-only 实测 12.67 ms（CC_SMALL_FP8）/ 11.09 ms（EXPERIMENTAL），但那是在**它自己的运行时**上；把我们的 `I'` 换成它的数字，得到的是"如果我们的岛也变成那么快"的**反事实**，不是可达目标 | §4.1【推算】 |
 | 5 | **"线 1 挂起"的结论不被推翻。** 三档收益表在新 `I'` 下数值上移，但决定立项的三个前提量（ratio / D' / I'）在**我们这条链上仍未测**，上游的数字一个都没替我们测 | §4.3 |
 | 6 | **显存：上游的 1410 MiB 降幅我们一分拿不到**，因为它来自 `nr_runtime.cpp` 里 0.0.8.2 新增的惰性图像/延迟噪声表等机制，我们的运行时没有这些代码。我们能拿的只有 `h16` 历史精度那一条 | §5.2 |
@@ -65,7 +65,8 @@ release notes：新增 `[Network] History Precision`，**16 是默认**，16 = �
 
 **显存归因**【推算】：4K 历史图像 2×133 MiB（RGBA32F）→ 2×66 MiB（RGBA16F），
 省 **134 MiB**（`nr_runtime.cpp:302-303` 注释原文 "4K: 2 x 66 MB instead of 2 x 133"）。
-1410 MiB 总降幅中，其余约 **1276 MiB** 来自 0.0.8.2 新增的惰性图像/延迟噪声表等机制（见 §5.2）。
+**但 1410 MiB 总降幅的主体不在这里**——按三档降幅折算的 ~170 MiB/MPix 与上游 `nr_graph.cpp` 自己的
+"融合图像输入/输出 3 x 535 MB"（图/plan 层）同量级，**图/plan 层约占 9 成**（详见 §5.2）。
 
 ### 1.3 每个游戏帧只跑一次 NR
 
@@ -230,6 +231,8 @@ GetScratchBufferSize / Init / Init_Ext / Init_ProjectID / ReleaseFeature / Shutd
 | `CC_SMALL_FP8_EXPERIMENTAL` | ❌ | ❌ | ✅ |
 | `lazy-images` / `materialize` / `make_noise` / `retired_pools` | ❌ | ❌ | ✅（0.0.8.2 新增） |
 | `switch_history` / `h16_ok` | ❌ | ❌ | ✅（0.0.8.2 新增） |
+| **图/plan 层**：`arena reuse`（复用前两层的字节） | ✅（**早期形态**） | ✅（9 处） | ✅（14 处） |
+| **图/plan 层**：死槽消除 `dead_slots` / `arena_joined` / `arena pingpong` | ❌ | ❌ | ✅（0.0.8.2 新增） |
 | `NR_RENODX_FUSE` / `NR_RENODX_PROF` | ✅ | — | ✅ |
 | `v6_pedestal_reduce` / `SDR (legacy codec)` / `absolute HDR (v6 codec)` | ✅ | — | ✅ |
 
@@ -237,7 +240,11 @@ GetScratchBufferSize / Init / Init_Ext / Init_ProjectID / ReleaseFeature / Shutd
 
 1. **我们有 `NR_KEEP_RGBA32F`、上游 0.0.8.1/0.0.8.2 都没有** → 我们这份不是"上游某个旧版本"，
    是**平行的另一个分支**（上游 v0.0.2.3 的 `nr_renodx_keys.hpp` 里也没有 `NRSdrBlackRestore`/`NRCodecMode`）。
-2. **我们缺上游 0.0.8.2 的全部显存机制**（`lazy-images` 等 6 个标记一个都没有）→ §5.2 的 1410 MiB 与我们无关。
+2. **我们缺上游 0.0.8.2 的全部显存机制**：运行时层六个标记（`lazy-images`/`materialize`/`make_noise`/
+   `retired_pools`/`switch_history`/`h16_ok`）**一个都没有**；
+   **图/plan 层**我们只有 arena 复用的**早期形态**（有 `arena reuse: an unsized slot aliases no value` 等串），
+   而 0.0.8.2 才有的死槽消除（`dead_slots`/`arena_joined`/`arena pingpong`）**全无**——
+   而这正是上游 1410 MiB 降幅的主体（§5.2）。**结论：上游那笔显存我们一分拿不到。**
 
 另注（顺手纠一处本仓库的隐患）：`src/nrtest/MochiNrApi.h` 声明的唯一导出是 `MochiNrGetApi`，
 而**二进制实际导出的是 `LmxxfNrGetApi`**。`src/nvngx-shim/passthrough.cpp:182` 取的正是 `LmxxfNrGetApi`
@@ -374,27 +381,51 @@ v0.6 的性能预算就应按"权重固定 = `I'` 固定"来做，而不是留�
 
 | 上游 4K 数字 | 能不能用在我们身上 |
 |---|---|
-| CC_SMALL_FP8 2216 → 806 MiB | ❌ 这是**上游运行时**的显存。构成它的三个机制：`h16_ok`/`switch_history`（16-bit 历史）、`--lazy-images`/`materialize`（输入拷贝与答案图像按需才实体化）、`make_noise`（噪声表延迟生成）。**我们的运行时这六个标记一个都没有**（§3.2 实测），所以我们的 4K 网络显存**不会**因此下降 |
+| CC_SMALL_FP8 2216 → 806 MiB | ❌ 这是**上游那套运行时**的显存。构成它的机制横跨**两层**：<br>① **图/plan 层**（`nr_graph.cpp`）：arena 复用的死槽消除与"融合图像输入/输出"槽消除（上游注释："the fused image input and output alone held **3 x 535 MB** of full-resolution FP16"）；<br>② **运行时层**（`nr_runtime.cpp`）：`h16_ok`/`switch_history`（16-bit 历史）、`--lazy-images`/`materialize`（输入拷贝与答案图像按需实体化）、`make_noise`（噪声表延迟生成）。<br>**我们的运行时：① 完全没有**（`dead_slots` / `arena_joined` / `arena pingpong` 三个 0.0.8.2-only 标记实测 0 命中）；**② 只有 `NR_HIST16` 一个**（且无 `h16_ok`/`switch_history`）。所以我们的 4K 网络显存**不会**因此下降 |
 | 1440p / 1080p 同理 | ❌ 同上 |
 | 且这是 Linux + RX 9070 XT + network-only | ❌ 三重口径不符 |
 
 ### 5.2 那 1410 MiB 到底由什么构成【推算】
 
-| 成分 | 4K 节省 | 依据 |
-|---|---|---|
-| 历史图像 32bit → 16bit | **134 MiB** | 上游注释原文 "4K: 2 x 66 MB instead of 2 x 133"（`nr_runtime.cpp:302-303`）；2×133 − 2×66 = 134 |
-| 惰性图像 + 延迟噪声表 + 资源退休 | **约 1276 MiB** | 1410 − 134（1410 = 2216 − 806，上游 release notes） |
-| **合计** | **1410 MiB** | |
+**先看缩放**（三档实测降幅除以像素数）：
 
-**我们能拿的部分**：只有 16-bit 历史那一条的**前提**——我们的运行时**已经有** `NR_HIST16` 与
-`temporal_post_fp32h16.spv` / `temporal_post_fp32h16_grade.spv`（在 `dlssnr-amd/aco/shaders/temporal/` 里，
-实测在位），而上游 0.0.8.1 里 `NR_HIST16` 就是这个开关（`nr_runtime.cpp:283` 注释："research NR_HIST16=1"）。
-**但我们没有上游 0.0.8.2 的 `h16_ok` 探测与 `switch_history` 运行时切换**——
-我们的 `NR_HIST16` 只能在**进程启动时**通过环境变量设定一次，且改格式后历史会重来（上游 0.0.8.2 也是
-"a switch is a cut"，即切换即历史清空）。
+| 分辨率 | 旧 → 新 | 降幅 | MiB/MPix | B/px |
+|---|---|---|---|---|
+| 1920×1080 | 671 → 320 MiB | 351 | 169.3 | 177 |
+| 2560×1440 | 1072 → 461 MiB | 611 | 165.7 | 174 |
+| 3840×2160 | 2216 → 806 MiB | 1410 | 170.0 | 178 |
 
-**结论**：上游的显存大改，**我们最多继承它 10% 的思路（16-bit 历史），且需要自己做**；
-`h16_ok`/`switch_history`/`lazy-images`/`materialize`/`make_noise` 五项都得自己移植。
+**降幅几乎完全正比于像素数**（169/166/170 MiB/MPix，三档偏差 < 3%）⇒ 这是一次**逐像素缓冲**的减少，
+不是固定开销（权重、plan 常量）的减少。
+
+按上游自己给的 4K 数字对账：
+
+| 成分 | 层 | 4K 量 | 依据 |
+|---|---|---|---|
+| **图/plan 层**：融合图像输入/输出槽消除 | `nr_graph.cpp` | **~1531 MiB**（= 3 × 535 MB，170 MiB/MPix） | 上游注释原文 "the fused image input and output alone held **3 x 535 MB** of full-resolution FP16"（`nr_graph.cpp:4650`）。**这一条单独就等于全部降幅的量级** |
+| 图/plan 层：arena 复用（persistent-run 值共享前两层的字节） | `nr_graph.cpp` | 4K small model **596 → 566 MB**（省 30 MB） | 上游注释原文（`nr_graph.cpp:4843`）；0.0.8.1 的 `nr_graph.cpp` 里 "arena reuse" 出现 **9** 次、0.0.8.2 变 **14** 次 |
+| 运行时层：历史图像 32bit → 16bit | `nr_runtime.cpp` | **134 MiB**（4K: 2 x 133 → 2 x 66 MB） | 上游注释原文（`nr_runtime.cpp:302-303`） |
+| 运行时层：惰性图像 + 延迟噪声表 + 资源退休 | `nr_runtime.cpp` | 与图/plan 层的槽消除**重叠计量**，无法从公开数字里干净拆出 | `lazy-images`/`materialize`/`make_noise`/`retired_pools` 均为 0.0.8.2 新增（实测 0.0.8.1 全部 0 命中） |
+
+**结论（与本文初稿不同，此处更正）**：这 1410 MiB 的**主体在图/plan 层，不在运行时层**。
+初稿把它归给"惰性图像 + 延迟噪声表 + 资源退休"（运行时层），是**低估了图/plan 层的分量**——
+按上游自己的注释，"融合图像输入/输出槽"三项就占 3 × 535 MB ≈ 1531 MiB，
+而运行时层的历史精度一项只占 134 MiB（**约 9%**）。
+
+**这对我们意味着什么（结论方向不变，但理由更硬）**：
+- 我们那份运行时的图/plan 层**有** arena 复用的**早期形态**（实测含 `arena reuse: an unsized slot aliases no value`
+  等 0.0.8.2 也有的串），但**没有** 0.0.8.2 才有的死槽消除 / `arena_joined` / `arena pingpong`
+  （三个标记实测 0 命中）⇒ **大头拿不到**。
+- 16-bit 历史（134 MiB，占 9%）是我们**唯一**能低成本继承的一条，因为我们的运行时**已经有**
+  `NR_HIST16` 与 `temporal_post_fp32h16.spv` / `temporal_post_fp32h16_grade.spv`
+  （在 `dlssnr-amd/aco/shaders/temporal/` 里，实测在位），上游 0.0.8.1 的 `NR_HIST16` 就是同一个开关
+  （`nr_runtime.cpp:283` 注释："research NR_HIST16=1"）。
+  **但我们没有上游 0.0.8.2 的 `h16_ok` 探测与 `switch_history` 运行时切换**——
+  我们的 `NR_HIST16` 只能在**进程启动时**通过环境变量设定一次，且改格式后历史会重来
+  （上游 0.0.8.2 也是 "a switch is a cut"，即切换即历史清空）。
+
+⇒ 上游的显存大改，**我们最多继承它约 9% 的思路（16-bit 历史）**，且需要自己做；
+大头（图/plan 层的槽消除）**必须移植上游的图编译器**才可能拿到。
 这是一个**明确的 v0.7 候选工程**，不是 v0.6 的行动项。
 
 ### 5.3 16 GB 卡的预算：约束没有解除，但也没有原来那么紧
@@ -483,8 +514,8 @@ NVIDIA 的 DLL 每次运行输出逐字节一致，所以这些数字是实现�
 
 - **我们与上游 v0.0.8.2 用的是同一份 NVIDIA 权重**（§2.2），所以"换上游会不会掉画质"这个问题
   在**权重层不成立**。
-- 但**我们的运行时分支与上游不同**（`NR_KEEP_RGBA32F` 的存在、`lazy-images` 的缺失、
-  `switch_history` 的缺失），所以"我们的输出与上游的输出会不会有可见差异"**是开放问题**，
+- 但**我们的运行时分支与上游不同**（`NR_KEEP_RGBA32F` 的存在、`lazy-images` 与 `switch_history` 的缺失、
+  图/plan 层缺死槽消除），所以"我们的输出与上游的输出会不会有可见差异"**是开放问题**，
   只能用 §6.2 的语料实测。这也是我们**应该做**那个验收的原因。
 
 ---
@@ -534,7 +565,7 @@ NVIDIA 的 DLL 每次运行输出逐字节一致，所以这些数字是实现�
 
 | # | 行动 | 人时 | 理由 |
 |---|---|---|---|
-| **C1** | **移植上游 0.0.8.2 的显存机制**：`--lazy-images`/`materialize`、`make_noise`、`retired_pools/images/buffers`、`h16_ok`/`switch_history` | **15–25** | 需要读懂并改我们的运行时分支（与上游不是同一分支）。收益待 B3 实测后才知上限。**先出 B3 的数再决定做不做** |
+| **C1** | **移植上游 0.0.8.2 的显存机制**：① **图/plan 层**（主体，~1531 MiB @4K）：`dead_slots` 死槽消除、`arena_joined`/`arena pingpong`、`nr_graph.cpp` 的融合图像槽消除；② **运行时层**：`--lazy-images`/`materialize`、`make_noise`、`retired_pools/images/buffers`、`h16_ok`/`switch_history` | **30–50**（比初稿的 15–25 上调，因为主体在图编译器而非运行时） | 需要读懂并改我们的运行时分支（与上游不是同一分支）。**图/plan 层的改动落在"网络怎么编"上，不只是运行时开关**——要重新编译我们的网络图与我们那份 ACO 记录，不是改几个 flag。收益待 B3 实测后才知上限。**先出 B3 的数再决定做不做** |
 | **C2** | **运行时切换 History Precision**（16↔32 热切） | 随 C1 | 我们运行时目前只有启动期 `NR_HIST16`；热切要加运行时控制项 + ABI 字段 |
 | **C3** | **接 EXPERIMENTAL 网络** | 未知 | 需要一个认识 `CC_SMALL_FP8_EXPERIMENTAL` 的运行时分支；上游 0.0.8.2 的 Windows 包不给这种运行时。等我们的运行时分支自己长出这个能力 |
 | **C4** | **重新抽取模型**（用上游 `model-tools/dlssnr_extract_model.exe` + `nvngx_dlssnr-310.9.16-50s.dll`） | **0.5** | 产出的字节与现有**完全相同**（§3.4）。只作为"我们能自证合规"的存档动作，不改任何文件 |
@@ -622,7 +653,7 @@ NVIDIA 的 DLL 每次运行输出逐字节一致，所以这些数字是实现�
 
 | # | 不清楚 | 为什么重要 | 怎么查 |
 |---|---|---|---|
-| 1 | **我们这份运行时到底对应上游哪个 commit？** 它有 `NR_KEEP_RGBA32F`（上游 0.0.8.1/0.0.8.2 都没有）、有 `NR_HIST16`（0.0.8.1 起）、无 `CC_SMALL_FP8_EXPERIMENTAL`（0.0.8 起）。这不是上游任何公开 tag | 决定我们能否"往上游靠"：如果只是差几个 commit，移植 §5.2 的机制就便宜；如果是一条独立分支，就是重写 | 我们的运行时来自第三方 HF 镜像（不是 mochizuki 作者直供），**可能带作者的私有改动**。查法：拿运行时里的版本字符串/`.text` 里的构建路径字符串；或直接问 zmodelerlover 该镜像的来源 |
+| 1 | **我们这份运行时到底对应上游哪个 commit？** 它有 `NR_KEEP_RGBA32F`（上游 0.0.8.1/0.0.8.2 都没有）、有 `NR_HIST16`（0.0.8.1 起）、无 `CC_SMALL_FP8_EXPERIMENTAL`（0.0.8 起）；图/plan 层有 arena 复用的**早期形态**（`arena reuse: an unsized slot aliases no value` 等串，0.0.8.1 的 `nr_graph.cpp` 里 "arena reuse" 出现 9 次）但无 0.0.8.2 的死槽消除。这不是上游任何公开 tag | 决定我们能否"往上游靠"：如果只是差几个 commit，移植 §5.2 的机制就便宜；如果是一条独立分支，就是重写。**新增证据**：我们的 ACO 记录 62 个中有 **61 个**在 0.0.8.1 的记录集（100 个）里，只有 `fe7321388bc32684.nrp` 不在——说明我们的运行时**是 0.0.8.1 附近的构建**，但缺 39 个上游已有的记录（我们只带了用得上的那些） | 我们的运行时来自第三方 HF 镜像（不是 mochizuki 作者直供），**可能带作者的私有改动**。查法：拿运行时里的版本字符串/`.text` 里的构建路径字符串；或直接问 zmodelerlover 该镜像的来源 |
 | 2 | 我们这份运行时在 `NR_HIST16=1` 下**实际省多少显存**、画质有无变化 | 决定 §5.2 里那 134 MiB 我们能拿多少 | 9070 XT 上：4K 100% 渲染率，两次跑（env 设/不设），读显存差值 + 截图对比 |
 | 3 | 我们这条链的 **4K 网络显存实测值** | §5.3 的 2216 MiB 是**上游口径的占位值**，我们的账建在别人的数上 | 9070 XT，4K，读差值（B3） |
 | 4 | **我们的 P2 链在 FG 开启时 NR 跑几次** | 决定 v0.6 说明能不能提"每游戏帧一次"（§7.4） | 现有 shim 日志已够：`g_evalCount` vs `g_nrFrames` vs 游戏帧数 |
@@ -664,7 +695,7 @@ FG 2x 计数 3311/1650）、`docs/experiments-2026-11-03.md`（抗闪烁 +271 Mi
 
 ---
 
-## 9. 增补：与已落地的 v0.6（`526ba7a`）的关系
+## 11. 增补：与已落地的 v0.6（`526ba7a`）的关系
 
 本文写作时 v0.6 的面板接线提交尚未并入，事后核对如下（**只列事实，不改上文任何结论**）：
 
@@ -678,3 +709,47 @@ FG 2x 计数 3311/1650）、`docs/experiments-2026-11-03.md`（抗闪烁 +271 Mi
 另注：v0.6 已决定**关闭时域、不用抗闪烁**，以收紧参数区间替代。因此上游 v0.0.8.2 的
 History precision（16/32）与抗闪烁相关的显存机制，对我们是**更低优先级**——我们本来就不走自研时域路线，
 本文 P2（移植显存机制 + History Precision 热切）的收益评估需按此重新排序。
+
+---
+
+## 12. 修订记录
+
+### 11.1 2026-11-05 提交后自查：更正 §5.2 的显存归因（结论方向不变，理由更硬）
+
+**初稿把 1410 MiB 的主体归给运行时层机制**（惰性图像 / 延迟噪声表 / 资源退休），把 16-bit 历史单列为
+134 MiB（~9%）。**这个归因低估了图/plan 层的分量**，已更正。
+
+**触发更正的新证据**：
+
+1. **降幅严格正比于像素数**：1080p/1440p/4K 三档实测降幅折算为 **169.3 / 165.7 / 170.0 MiB/MPix**
+   （三档偏差 < 3%）⇒ 是一次**逐像素缓冲**的减少，不是固定开销（权重/plan 常量）。
+2. **上游自己在 `nr_graph.cpp` 里给了 4K 的逐项数字**：
+   - `"the fused image input and output alone held **3 x 535 MB** of full-resolution FP16"`（:4650）
+     → 3 × 535 MB = 1605 MB ≈ **1531 MiB**，与 1410 MiB 同量级（**这一条单独就够整个降幅**）；
+   - `"4K small model 596 -> 566 MB"`（:4843）→ arena 复用另省 30 MB。
+3. **0.0.8.1 → 0.0.8.2 改了 77 个文件**，含 `nr_graph.cpp`、`nr_runtime.cpp`、`nrvk.hpp`、
+   `nr_shader_manifest.hpp`、`image_input.glsl`、`pipelines.json` ⇒ 改动**同时落在图编译与运行时两侧**。
+4. **我们那份运行时的实测**：图/plan 层有 arena 复用的**早期形态**
+   （`arena reuse: an unsized slot aliases no value` 等串在位；0.0.8.1 的 `nr_graph.cpp` 里
+   "arena reuse" 出现 9 次），但 **0.0.8.2 才有的 `dead_slots` / `arena_joined` / `arena pingpong`
+   三个标记全部 0 命中** ⇒ 大头拿不到。
+
+**更正后的 §5.2 结论**：
+- 1410 MiB 的主体在**图/plan 层**（~1531 MiB 量级），运行时层的历史精度只占 **134 MiB（~9%）**。
+- 我们最多能低成本继承的仍是那 **9%**（`NR_HIST16` 我们已有，`h16_ok`/`switch_history` 没有）。
+- **对我们行动项的影响**：C1 的成本估算由 15–25 人时**上调到 30–50 人时**——
+  因为主体在"网络怎么编"（图编译器 + 我们的 ACO 记录），不是运行时改几个 flag。
+- **对 §5.1 / §5.3 / §0 结论的方向没有影响**：上游那笔显存我们**仍然一分拿不到**，
+  16 GB 卡的预算账（16.4%）与"显存不是瓶颈"的判断不变。
+
+### 11.2 其它增补（同一轮自查）
+
+| 位置 | 增补 |
+|---|---|
+| §3.2 | 表中拆出**图/plan 层**一行（arena 复用 / 死槽消除），此前只列了运行时层 |
+| §9 项 1 | 新增证据：我们的 62 个 ACO 记录中 **61 个**在 0.0.8.1 的记录集（100 个）里，只有 `fe7321388bc32684.nrp` 不在 ⇒ 我们这份运行时**是 0.0.8.1 附近的构建**（且我们只带了用得上的 39 个记录缺口的子集） |
+| §6.3 | "我们的运行时分支与上游不同"的证据补上图/plan 层缺死槽消除 |
+| §0 项 3 | 同步为"运行时 + 图/plan 两层" |
+
+**未变的结论**：§0 的 9 条结论、§2（权重已逐字节相同）、§3.1（无 ABI 兼容的运行时可换）、
+§4（帧时间收益不可达、线 1 不推翻）、§7（行动清单）、§8（风险与不做的事）均未因本次更正而改变。
