@@ -9,7 +9,7 @@
 |---|---|---|---|
 | [SAOG0721/Magpie](https://github.com/SAOG0721/Magpie)（`experimental` 分支，v0.6.11） | 宿主本体：捕获、效果链、D3D11 渲染、不激活的缩放窗口 | **GPL-3.0** | Release zip 内含，仓库不含 |
 | [lmxxf/dlss5-on-amd-9070xt-porting](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) | `mochinr` 的钩子写法 + lmxxf 权重（`DLSS5-AMD\native-game-tiled-assets`） | MIT | 否 |
-| [mochizuki0323/DLSSNR-AMD](https://github.com/mochizuki0323/DLSSNR-AMD) | mochizuki 运行时与 ACO/FP8 权重 | MIT | 否 |
+| [mochizuki0323/DLSSNR-AMD](https://gitlab.com/mochizuki0323/DLSSNR-AMD)（**GitLab**；原 GitHub 仓库已因作者账号被封而失效） | mochizuki 运行时与 ACO/FP8 权重 | MIT | 否 |
 | [zmodelerlover/OpenNR-ReShade](https://github.com/zmodelerlover/OpenNR-ReShade) | OpenNR 宿主、ReShade add-on 工程结构、RenoDX 风格面板写法 | MIT | 仅 `dist/amd-nr.addon64`（该源码的构建产物 + 本仓库补丁） |
 | [crosire/reshade](https://github.com/crosire/reshade) | 注入层与 add-on API（6.8.0.2155） | BSD-3-Clause | 否 |
 | [clshortfuse/renodx](https://github.com/clshortfuse/renodx) | 参数面板的风格与术语（经 OpenNR 传入本项目） | MIT | 否 |
@@ -40,8 +40,29 @@
 
 ## 3. mochizuki 运行时与权重（Vulkan / ACO）
 
-作者仓库：<https://github.com/mochizuki0323/DLSSNR-AMD>（运行时 `MochizukiNrRuntime.dll`、
+> **2026-11-05 勘误（重要）**：作者的 GitHub 账号被意外封禁、原仓库已不可访问，
+> 项目迁往 **GitLab**：<https://gitlab.com/mochizuki0323/DLSSNR-AMD>。
+> 另须分清**两条产品线**——它们是同一作者的兄弟分支，不是版本前后：
+>
+> | 产品线 | 形态 | 我们能用吗 |
+> |---|---|---|
+> | **GitLab 主线**（0.0.8.x） | `dlssnr-amd.asi`（OptiScaler 插件）/ `dlssnr_amd.addon64`（ReShade 插件）/ `_nvngx.dll`；源码含运行时本体（`nr_graph.cpp`/`nr_runtime.cpp`/`nrvk.hpp`） | **不能直接用**：全量源码 1203 文件里没有 `MochiNrGetApi`/`LmxxfNrGetApi`/`MochizukiNrRuntime` 任何一个符号 |
+> | **`MochizukiNrRuntime.dll`**（我们用的这份，`0.5.8-opennr` 包） | 独立 DLL，导出 `LmxxfNrGetApi` + `MochizukiNr*`；我们的 shim 直接加载 | **正在用**（构建时间约在 0.0.8.1 附近：我们 62 个 ACO 记录里 61 个在其记录集） |
+
+作者仓库（GitLab）：<https://gitlab.com/mochizuki0323/DLSSNR-AMD>（运行时 `MochizukiNrRuntime.dll`、
 SPIR-V 变体、ACO 记录、FP8/int4 权重都出自这里）。
+
+**⚠ 来源规则（用户裁决，2026-11-05）：以后 OpenNR 家族的东西一律去 `zmodelerlover` 那里找**——
+他同时维护着 OpenNR 的 ReShade 工程与 mochizuki 运行时的重打包渠道。相关仓库：
+
+| 仓库 | 有什么 |
+|---|---|
+| [zmodelerlover/OpenNR-ReShade](https://github.com/zmodelerlover/OpenNR-ReShade) | OpenNR 的 ReShade add-on；`core/shared/runtime_choice.h` 证实两条产品线是并列选项（`kDanielblnc` = `dlssnr_amd_pass1.dll` / `kMochizuki` = `MochizukiNrRuntime.dll`） |
+| [zmodelerlover/OpenNR-Installer](https://github.com/zmodelerlover/OpenNR-Installer) | 找游戏、校验 payload、装 ReShade 与 DLSS-NR add-on |
+| [zmodelerlover/amd-nr](https://huggingface.co/datasets/zmodelerlover/amd-nr)（HuggingFace 数据集） | mochizuki 运行时重打包（下表）+ `addon/<版本>/amd-nr.addon64` 预编译 |
+| [MatheusFerreiraS/OpenNR-OptiScaler](https://github.com/MatheusFerreiraS/OpenNR-OptiScaler)（分支 `dlss-neural-rendering`） | **`MochizukiNrRuntime.cpp`（5449 行）——我们这份运行时 DLL 的源码镜像**（自足实现，导出与我们的 shim 逐个对应）；另有 `MochizukiNrControls.h`、RDNA3 支持。注意是 0.0.7 时代分支（无 EXPERIMENTAL、无 0.0.8.2 显存机制） |
+| [TheAutomatic/dlss-5-amd-project](https://github.com/TheAutomatic/dlss-5-amd-project) | OptiScaler 系 NR 工程 + `tools/build/build-mochizuki-runtime.py`（运行时构建脚本）+ `docs/mochizuki.md` |
+| [lmxxf/dlss5-on-amd-9070xt-porting](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) | 祖先：`LmxxfNrApi.h`/`LmxxfNrRuntime.cpp`（二进制导出名 `LmxxfNrGetApi` 的由来） |
 
 **分发方式**：作者本人不提供预编译发布，实际拿到的是 HuggingFace 数据集
 <https://huggingface.co/datasets/zmodelerlover/amd-nr> 里 `mochizuki/` 目录下的重新打包版
@@ -53,6 +74,19 @@ SPIR-V 变体、ACO 记录、FP8/int4 权重都出自这里）。
 | RDNA3 专用变体（可选，RDNA4 不需要） | `mochizuki/0.5.9-opennr/mochizuki-rdna3-0.5.9-opennr.zip` | 9 MB |
 | 默认网络（**包内没有，必须单独下**） | `mochizuki/model-small-1/dlssnr-small.bin` | 114 MB |
 | 310.8 网络（可选，int4 mixed 需要它） | `mochizuki/model-1/dlssnr.bin` | 148 MB |
+
+**权重哈希对照（2026-11-05 实测，部署目录 `dlssnr-amd\` 内的文件 vs 上游 v0.0.8.2 `install.ps1` 内置常量）**：
+三者 SHA256 全部一致 ⇒ "上游发新权重"对我们增量为零，我们早已同步。
+
+| 文件 | 字节数 | SHA256 |
+|---|---|---|
+| `dlssnr-small.bin`（CC_SMALL_FP8） | 113,917,248 | `7e966e2639dbec6596aa0bac3b8761137d2c40ca8cb4aca30df7ca10043c6e33` |
+| `dlssnr.bin`（CC_SILVER_AARDWOLD） | 147,756,560 | `2b41c888cf4155b8958c665ba64018ab0bd25c85fc71a2b6db86d0d04d1f7fbd` |
+| `dlssnr-int4.bin`（INT4_MIXED） | 53,211,392 | `22a0e2d3db1c2101a67e0d9aad066e0916afbc32cba47820f5ad24d46602319c` |
+
+> 权重本体是 NVIDIA 的、从用户自有的 `nvngx_dlssnr.dll`（310.9.16 / 310.8.0）抽取，
+> **不随任何包分发**（上游明文原则）。本地四份 NVIDIA DLL 里 `nvngx_dlssnr-310.9.16-50s.dll`
+> 哈希命中上游白名单，可用 `model-tools/dlssnr_extract_model.exe` 重抽校验。
 
 **注意压缩包里的目录是拍平的**：`dlssnr-amd.shaders.renodx/` 实际是
 `dlssnr-amd/shaders/renodx/`，也就是“点 = 路径分隔符”。运行时按 `dlssnr-amd\<子目录>` 找资产，
@@ -117,7 +151,7 @@ dlssnr-amd\
 - **SAOG0721** — Magpie Experimental，整套捕获与缩放链路的地基；
 - **lmxxf（Kien）** — 第一个把 DLSS 神经渲染搬到 AMD 的人之一，`mochinr` 的钩子写法直接来自其工程；
 - **mochizuki0323（望月）** — mochizuki 运行时
-  （[mochizuki0323/DLSSNR-AMD](https://github.com/mochizuki0323/DLSSNR-AMD)）：
+  （[mochizuki0323/DLSSNR-AMD](https://gitlab.com/mochizuki0323/DLSSNR-AMD)，GitLab）：
   用 Vulkan + FP8 把这套网络做得又快又省，是整个 NR 后端的核心；
 - **zmodelerlover** — OpenNR 宿主与 RenoDX 风格面板，本项目 add-on 工程结构与参数组织都受益于此；
 - **crosire** — ReShade，本项目所有 add-on 的宿主与 API；
