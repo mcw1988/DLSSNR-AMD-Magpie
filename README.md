@@ -187,7 +187,7 @@ mochizuki  3.4     (网络, ACO)   + ≈1.9 (D3D11→D3D12→Vulkan)    = 5.3 ->
 |---|---|---|
 | [**SAOG0721/Magpie**](https://github.com/SAOG0721/Magpie)（Experimental 分支，v0.6.11） | 宿主本体：捕获、效果链、D3D11 渲染、缩放窗口 | **GPL-3.0** |
 | [**lmxxf/dlss5-on-amd-9070xt-porting**](https://github.com/lmxxf/dlss5-on-amd-9070xt-porting) | `mochinr` 的**钩子写法**（`ffxDispatch` 拦截 / 提交期劈批 / 重放）与 **lmxxf 权重** | MIT |
-| [**mochizuki0323/DLSSNR-AMD**](https://github.com/mochizuki0323/DLSSNR-AMD) | **mochizuki（ACO / Vulkan）权重与运行时**（作者不提供预编译发布，实取 HF 上的重新打包版） | MIT |
+| [**mochizuki0323/DLSSNR-AMD**](https://gitlab.com/mochizuki0323/DLSSNR-AMD) | **mochizuki（ACO / Vulkan）权重与运行时**（作者不提供预编译发布，实取 HF 上的重新打包版） | MIT |
 | [**zmodelerlover/OpenNR-ReShade**](https://github.com/zmodelerlover/OpenNR-ReShade) | OpenNR 宿主本体；**ReShade add-on 工程结构**与 **RenoDX 风格参数面板**的写法（其风格源自 [RenoDX](https://github.com/clshortfuse/renodx)） | MIT |
 | [crosire/reshade](https://github.com/crosire/reshade) | 注入与 add-on API（6.8.0.2155，BSD-3-Clause） | BSD-3-Clause |
 

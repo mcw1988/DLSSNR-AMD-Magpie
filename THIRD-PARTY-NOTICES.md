@@ -11,7 +11,7 @@
 | ReShade 6.8 | <https://github.com/crosire/reshade> | BSD-3-Clause | 否 | 是（`dxgi.dll`） |
 | ReShade 头文件 `reshade.hpp` 等 | 同上 | BSD-3-Clause | 否（构建时引用） | — |
 | OpenNR | <https://github.com/zmodelerlover/OpenNR-ReShade> | MIT | 仅 `dist/amd-nr.addon64`（构建产物 + 本仓库补丁） | 是 |
-| DLSSNR-AMD / `MochizukiNrRuntime.dll` | <https://github.com/mochizuki0323/DLSSNR-AMD> | MIT | 否 | 是（运行时 + `dlssnr-amd\`） |
+| DLSSNR-AMD / `MochizukiNrRuntime.dll` | <https://gitlab.com/mochizuki0323/DLSSNR-AMD> | MIT | 否 | 是（运行时 + `dlssnr-amd\`） |
 | lmxxf `dlss5-on-amd-9070xt-porting` | <https://github.com/lmxxf/dlss5-on-amd-9070xt-porting> | MIT | 否 | 否（594 MB 权重另行分发） |
 | RenoDX（面板风格来源） | <https://github.com/clshortfuse/renodx> | MIT | 否 | 否 |
 | MinHook | <https://github.com/TsudaKageyu/minhook> | MIT | 否（构建 `mochinr`/`amd-nr` 时引用） | — |
@@ -78,7 +78,7 @@ SOFTWARE.
 
 ### DLSSNR-AMD — mochizuki 运行时（MIT）
 
-作者仓库：<https://github.com/mochizuki0323/DLSSNR-AMD>。作者不提供预编译发布，发布包内的
+作者仓库：<https://gitlab.com/mochizuki0323/DLSSNR-AMD>。作者不提供预编译发布，发布包内的
 `MochizukiNrRuntime.dll` 与 `dlssnr-amd\` 取自 HuggingFace 数据集
 <https://huggingface.co/datasets/zmodelerlover/amd-nr> 的 `mochizuki/` 目录（重新打包，仅更换
 托管方）；版权与许可仍归原作者，本项目未作任何修改。
